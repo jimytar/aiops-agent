@@ -1,0 +1,102 @@
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: {{ include "aiops-agent.fullname" . }}-config
+  namespace: {{ .Release.Namespace }}
+  labels:
+    {{- include "aiops-agent.labels" . | nindent 4 }}
+data:
+  config.yaml: |
+    claudeModel: {{ .Values.agent.claudeModel | quote }}
+    webhookPort: {{ .Values.agent.webhookPort }}
+    confirmationTimeoutSeconds: {{ .Values.agent.confirmationTimeoutSeconds }}
+    maxToolOutputBytes: {{ .Values.agent.maxToolOutputBytes }}
+    kubeconfigDir: /etc/aiops/kubeconfigs
+    sshKeyDir: /etc/aiops/ssh
+    {{- if .Values.agent.allowedChatIDs }}
+    allowedChatIDs:
+      {{- range .Values.agent.allowedChatIDs }}
+      - {{ . }}
+      {{- end }}
+    {{- end }}
+    {{- if .Values.agent.defaultChatID }}
+    defaultChatID: {{ .Values.agent.defaultChatID }}
+    {{- end }}
+    clusters:
+      {{- range .Values.agent.clusters }}
+      - name: {{ .name | quote }}
+        {{- if .inCluster }}
+        inCluster: true
+        {{- else }}
+        inCluster: false
+        kubeconfigFile: {{ default .name .kubeconfigFile | quote }}
+        {{- end }}
+      {{- end }}
+    {{- if .Values.agent.sshHosts }}
+    sshHosts:
+      {{- range $name, $host := .Values.agent.sshHosts }}
+      {{ $name }}:
+        user: {{ $host.user | quote }}
+        host: {{ $host.host | quote }}
+        port: {{ default 22 $host.port }}
+      {{- end }}
+    {{- end }}
+    sshAllowedReadonly:
+      {{- range .Values.agent.sshAllowedReadonly }}
+      - {{ . | quote }}
+      {{- end }}
+    sshAllowedMutating:
+      {{- range .Values.agent.sshAllowedMutating }}
+      - {{ . | quote }}
+      {{- end }}
+    {{- if or .Values.agent.gitRepoDirs (and .Values.gitRepos.enabled .Values.gitRepos.repos) }}
+    gitRepoDirs:
+      {{- if and .Values.gitRepos.enabled .Values.gitRepos.repos }}
+      {{- range .Values.gitRepos.repos }}
+      - {{ .mountPath | quote }}
+      {{- end }}
+      {{- else }}
+      {{- range .Values.agent.gitRepoDirs }}
+      - {{ . | quote }}
+      {{- end }}
+      {{- end }}
+    {{- end }}
+    {{- if .Values.agent.kubectlExecAllowedCommands }}
+    kubectlExecAllowedCommands:
+      {{- range .Values.agent.kubectlExecAllowedCommands }}
+      - {{ . | quote }}
+      {{- end }}
+    {{- end }}
+    tools:
+      disabled:
+        {{- range .Values.agent.tools.disabled }}
+        - {{ . | quote }}
+        {{- else }}
+        []
+        {{- end }}
+      tiers:
+        {{- range $tool, $tier := .Values.agent.tools.tiers }}
+        {{ $tool }}: {{ $tier | quote }}
+        {{- else }}
+        {}
+        {{- end }}
+    {{- if .Values.agent.mcpServers }}
+    mcpServers:
+      {{- range .Values.agent.mcpServers }}
+      - name: {{ .name | quote }}
+        url: {{ .url | quote }}
+        tokenEnv: {{ .tokenEnv | quote }}
+        {{- if .allowedTools }}
+        allowedTools:
+          {{- range .allowedTools }}
+          - {{ . | quote }}
+          {{- end }}
+        {{- end }}
+        {{- if .deniedTools }}
+        deniedTools:
+          {{- range .deniedTools }}
+          - {{ . | quote }}
+          {{- end }}
+        {{- end }}
+      {{- end }}
+    {{- end }}

@@ -1,0 +1,6 @@
+apiVersion: v2
+name: aiops-agent
+description: Claude-powered AI ops agent with Telegram and webhook interfaces
+type: application
+version: 0.1.0
+appVersion: "0.1.0"

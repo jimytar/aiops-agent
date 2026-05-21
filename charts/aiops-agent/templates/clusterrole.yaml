@@ -1,0 +1,77 @@
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRole
+metadata:
+  name: {{ include "aiops-agent.fullname" . }}
+  labels:
+    {{- include "aiops-agent.labels" . | nindent 4 }}
+rules:
+  # Read-only access to common resources
+  - apiGroups: [""]
+    resources:
+      - pods
+      - pods/log
+      - services
+      - endpoints
+      - configmaps
+      - events
+      - namespaces
+      - nodes
+      - persistentvolumeclaims
+      - persistentvolumes
+    verbs: [get, list, watch]
+  - apiGroups: [apps]
+    resources:
+      - deployments
+      - daemonsets
+      - statefulsets
+      - replicasets
+    verbs: [get, list, watch]
+  - apiGroups: [batch]
+    resources: [jobs, cronjobs]
+    verbs: [get, list, watch]
+  # Flux CRDs (read-only)
+  - apiGroups:
+      - helm.toolkit.fluxcd.io
+      - kustomize.toolkit.fluxcd.io
+      - source.toolkit.fluxcd.io
+    resources: ["*"]
+    verbs: [get, list, watch]
+
+  # Mutating: rolling restart via annotation patch, scale
+  - apiGroups: [apps]
+    resources: [deployments, statefulsets, daemonsets]
+    verbs: [patch, update]
+  # Mutating: pod delete (for forced restarts) and exec
+  - apiGroups: [""]
+    resources: [pods]
+    verbs: [delete]
+  - apiGroups: [""]
+    resources: [pods/exec]
+    verbs: [create]
+  # Mutating: scale via subresource
+  - apiGroups: [apps]
+    resources:
+      - deployments/scale
+      - statefulsets/scale
+    verbs: [patch, update]
+  # Mutating: Flux reconciliation trigger (annotation patch)
+  - apiGroups:
+      - kustomize.toolkit.fluxcd.io
+      - helm.toolkit.fluxcd.io
+    resources: ["*"]
+    verbs: [patch]
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRoleBinding
+metadata:
+  name: {{ include "aiops-agent.fullname" . }}
+  labels:
+    {{- include "aiops-agent.labels" . | nindent 4 }}
+roleRef:
+  apiGroup: rbac.authorization.k8s.io
+  kind: ClusterRole
+  name: {{ include "aiops-agent.fullname" . }}
+subjects:
+  - kind: ServiceAccount
+    name: {{ include "aiops-agent.serviceAccountName" . }}
+    namespace: {{ .Release.Namespace }}

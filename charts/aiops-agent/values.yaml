@@ -1,0 +1,168 @@
+replicaCount: 1
+
+image:
+  repository: ghcr.io/jimytar/aiops-agent
+  tag: "main"
+  pullPolicy: IfNotPresent
+
+serviceAccount:
+  create: true
+  name: ""
+
+agent:
+  claudeModel: claude-sonnet-4-6
+  webhookPort: 8080
+  confirmationTimeoutSeconds: 300
+  maxToolOutputBytes: 8192
+
+  # Telegram chat IDs allowed to interact with the bot.
+  # Can also be set via ALLOWED_CHAT_IDS env (comma-separated).
+  allowedChatIDs: []
+  # Chat ID that receives webhook-triggered messages.
+  defaultChatID: ""
+
+  # Cluster configuration. inCluster:true uses the pod's own ServiceAccount.
+  clusters:
+    - name: bastion
+      inCluster: true
+    # - name: simitli-k8s
+    #   kubeconfigFile: simitli-k8s   # filename under /etc/aiops/kubeconfigs/
+
+  # SSH host aliases. Values are non-secret (user + host); keys are mounted separately.
+  sshHosts: {}
+  #   node1:
+  #     user: root
+  #     host: 192.168.1.10
+  #     port: 22
+
+  # Allowlisted SSH commands (prefixes).
+  sshAllowedReadonly:
+    - "systemctl status"
+    - "journalctl"
+    - "df -h"
+    - "df -H"
+    - "free -h"
+    - "uptime"
+    - "uname"
+    - "hostname"
+    - "ps aux"
+    - "top -bn1"
+  sshAllowedMutating:
+    - "systemctl restart"
+    - "systemctl stop"
+    - "systemctl start"
+
+  # Paths to git repos the agent can inspect/pull.
+  # When gitRepos.enabled is true, mountPaths from gitRepos.repos are used automatically.
+  gitRepoDirs: []
+
+  # Prefix-allowlist for kubectl exec commands (kubectl_exec tool).
+  # Commands that do not match any prefix are rejected before execution.
+  kubectlExecAllowedCommands:
+    - "env"
+    - "ls"
+    - "cat "
+    - "ps aux"
+    - "df -h"
+    - "free -h"
+    - "uptime"
+    - "psql "
+    - "redis-cli "
+    - "mysql "
+    - "mongosh "
+
+  # Tool control — disable built-in tools and/or override their confirmation tier.
+  tools:
+    # Tools to remove entirely from Claude's tool list.
+    # Valid names: kubectl_get, kubectl_describe, kubectl_logs, kubectl_get_events,
+    #   kubectl_restart, kubectl_scale, kubectl_rollout, kubectl_delete,
+    #   helm_list, helm_status, helm_rollback,
+    #   git_status, git_log, git_pull,
+    #   ssh_exec_readonly, ssh_exec
+    disabled: []
+    #   - kubectl_delete
+    #   - ssh_exec
+
+    # Override the default confirmation tier for specific tools.
+    # readonly   = execute immediately (no confirmation)
+    # mutating   = requires nonce confirmation
+    # destructive = requires confirmation + resource name re-entry
+    tiers: {}
+    #   kubectl_restart: readonly   # skip confirmation for restarts
+    #   git_pull: readonly          # skip confirmation for git pull
+
+  # MCP servers Claude connects to via the Beta API.
+  # tokenSecretName/tokenSecretKey point to a pre-existing SOPS-encrypted secret;
+  # the value is injected as an env var named by tokenEnv.
+  mcpServers: []
+  #   - name: home-assistant
+  #     url: https://ha.jimytar.com/api/mcp
+  #     tokenEnv: HA_MCP_TOKEN
+  #     tokenSecretName: aiops-ha-token
+  #     tokenSecretKey: token
+  #     # Allowlist specific HA services (empty = all tools exposed):
+  #     allowedTools: []
+  #       - light.turn_on
+  #       - light.turn_off
+  #       - climate.set_temperature
+  #       - cover.open_cover
+  #       - cover.close_cover
+  #     # Remove specific tools from the allowlist (ignored if allowedTools is empty):
+  #     deniedTools: []
+  #       - homeassistant.restart
+
+# Names of pre-existing Secrets (SOPS-encrypted, created separately).
+existingSecrets:
+  telegramToken:
+    secretName: aiops-telegram-token
+    key: token
+  anthropicAPIKey:
+    secretName: aiops-claude-api-key
+    key: api-key
+  webhookToken:
+    secretName: aiops-webhook-token
+    key: token
+  sshKeys:
+    secretName: aiops-ssh-keys
+  # One entry per remote cluster kubeconfig.
+  kubeconfigs: []
+  #   - secretName: aiops-kubeconfig-simitli
+  #     key: kubeconfig
+  #     filename: simitli-k8s    # written to /etc/aiops/kubeconfigs/simitli-k8s
+
+ingress:
+  enabled: false
+  className: traefik
+  host: aiops.example.com
+  annotations: {}
+  #   traefik.ingress.kubernetes.io/router.entrypoints: websecure
+  #   traefik.ingress.kubernetes.io/router.tls: "true"
+  #   traefik.ingress.kubernetes.io/router.tls.certresolver: letsencrypt
+  # TLS secret name (optional, omit to rely on certresolver)
+  tlsSecret: ""
+
+# Git repositories to clone at pod startup via init container.
+# The GitHub token is used for HTTPS auth; credentials are embedded
+# in each repo's remote URL so subsequent pull/push work without re-auth.
+gitRepos:
+  enabled: false
+  tokenSecretName: aiops-github-token
+  tokenSecretKey: token
+  repos: []
+  #   - name: deployments
+  #     url: https://github.com/jimytar/deployments
+  #     mountPath: /repos/deployments
+  #   - name: infrastructure
+  #     url: https://github.com/jimytar/infrastructure
+  #     mountPath: /repos/infrastructure
+
+resources:
+  requests:
+    cpu: 50m
+    memory: 128Mi
+  limits:
+    memory: 256Mi
+
+nodeSelector: {}
+tolerations: []
+affinity: {}

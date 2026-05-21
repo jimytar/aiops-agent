@@ -1,0 +1,16 @@
+apiVersion: v1
+kind: Service
+metadata:
+  name: {{ include "aiops-agent.fullname" . }}
+  namespace: {{ .Release.Namespace }}
+  labels:
+    {{- include "aiops-agent.labels" . | nindent 4 }}
+spec:
+  type: ClusterIP
+  ports:
+    - port: {{ .Values.agent.webhookPort }}
+      targetPort: webhook
+      protocol: TCP
+      name: webhook
+  selector:
+    {{- include "aiops-agent.selectorLabels" . | nindent 4 }}

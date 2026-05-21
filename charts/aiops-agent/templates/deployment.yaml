@@ -1,0 +1,184 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: {{ include "aiops-agent.fullname" . }}
+  namespace: {{ .Release.Namespace }}
+  labels:
+    {{- include "aiops-agent.labels" . | nindent 4 }}
+spec:
+  replicas: {{ .Values.replicaCount }}
+  selector:
+    matchLabels:
+      {{- include "aiops-agent.selectorLabels" . | nindent 6 }}
+  template:
+    metadata:
+      labels:
+        {{- include "aiops-agent.labels" . | nindent 8 }}
+      annotations:
+        # Force rollout when ConfigMap changes.
+        checksum/config: {{ include (print $.Template.BasePath "/configmap.yaml") . | sha256sum }}
+    spec:
+      serviceAccountName: {{ include "aiops-agent.serviceAccountName" . }}
+      securityContext:
+        runAsNonRoot: true
+        runAsUser: 65532
+        fsGroup: 65532
+      {{- if and .Values.gitRepos.enabled .Values.gitRepos.repos }}
+      initContainers:
+        - name: git-clone
+          image: alpine/git:latest
+          securityContext:
+            runAsUser: 65532
+            runAsNonRoot: true
+          env:
+            - name: GITHUB_TOKEN
+              valueFrom:
+                secretKeyRef:
+                  name: {{ .Values.gitRepos.tokenSecretName }}
+                  key: {{ .Values.gitRepos.tokenSecretKey }}
+            - name: GIT_AUTHOR_NAME
+              value: "AI Ops Agent"
+            - name: GIT_AUTHOR_EMAIL
+              value: "aiops@local"
+            - name: GIT_COMMITTER_NAME
+              value: "AI Ops Agent"
+            - name: GIT_COMMITTER_EMAIL
+              value: "aiops@local"
+          command:
+            - sh
+            - -c
+            - |
+              set -e
+              export HOME=/tmp
+              git config --global --add safe.directory '*'
+              {{- range .Values.gitRepos.repos }}
+              URL="https://x-access-token:${GITHUB_TOKEN}@{{ .url | trimPrefix "https://" }}"
+              if [ -d "{{ .mountPath }}/.git" ]; then
+                echo "Pulling {{ .name }}..."
+                git -C "{{ .mountPath }}" remote set-url origin "$URL"
+                git -C "{{ .mountPath }}" pull --ff-only
+              else
+                echo "Cloning {{ .name }}..."
+                git clone --depth=50 "$URL" "{{ .mountPath }}"
+                git -C "{{ .mountPath }}" config user.email "aiops@local"
+                git -C "{{ .mountPath }}" config user.name "AI Ops Agent"
+              fi
+              {{- end }}
+          volumeMounts:
+            {{- range .Values.gitRepos.repos }}
+            - name: git-repo-{{ .name }}
+              mountPath: {{ .mountPath }}
+            {{- end }}
+      {{- end }}
+      containers:
+        - name: aiops-agent
+          image: "{{ .Values.image.repository }}:{{ .Values.image.tag }}"
+          imagePullPolicy: {{ .Values.image.pullPolicy }}
+          env:
+            - name: CONFIG_FILE
+              value: /etc/aiops/config.yaml
+            - name: ANTHROPIC_API_KEY
+              valueFrom:
+                secretKeyRef:
+                  name: {{ .Values.existingSecrets.anthropicAPIKey.secretName }}
+                  key: {{ .Values.existingSecrets.anthropicAPIKey.key }}
+            - name: TELEGRAM_TOKEN
+              valueFrom:
+                secretKeyRef:
+                  name: {{ .Values.existingSecrets.telegramToken.secretName }}
+                  key: {{ .Values.existingSecrets.telegramToken.key }}
+            {{- if .Values.existingSecrets.webhookToken }}
+            - name: WEBHOOK_TOKEN
+              valueFrom:
+                secretKeyRef:
+                  name: {{ .Values.existingSecrets.webhookToken.secretName }}
+                  key: {{ .Values.existingSecrets.webhookToken.key }}
+                  optional: true
+            {{- end }}
+            {{- range .Values.agent.mcpServers }}
+            - name: {{ .tokenEnv }}
+              valueFrom:
+                secretKeyRef:
+                  name: {{ .tokenSecretName }}
+                  key: {{ .tokenSecretKey }}
+            {{- end }}
+          ports:
+            - name: webhook
+              containerPort: {{ .Values.agent.webhookPort }}
+              protocol: TCP
+          livenessProbe:
+            httpGet:
+              path: /healthz
+              port: webhook
+            initialDelaySeconds: 10
+            periodSeconds: 30
+          readinessProbe:
+            httpGet:
+              path: /healthz
+              port: webhook
+            initialDelaySeconds: 5
+            periodSeconds: 10
+          resources:
+            {{- toYaml .Values.resources | nindent 12 }}
+          volumeMounts:
+            - name: config
+              mountPath: /etc/aiops/config.yaml
+              subPath: config.yaml
+              readOnly: true
+            - name: kubeconfigs
+              mountPath: /etc/aiops/kubeconfigs
+              readOnly: true
+            {{- if .Values.existingSecrets.sshKeys }}
+            - name: ssh-keys
+              mountPath: /etc/aiops/ssh
+              readOnly: true
+            {{- end }}
+            {{- if and .Values.gitRepos.enabled .Values.gitRepos.repos }}
+            {{- range .Values.gitRepos.repos }}
+            - name: git-repo-{{ .name }}
+              mountPath: {{ .mountPath }}
+            {{- end }}
+            {{- end }}
+      volumes:
+        - name: config
+          configMap:
+            name: {{ include "aiops-agent.fullname" . }}-config
+        - name: kubeconfigs
+          projected:
+            sources:
+              {{- range .Values.existingSecrets.kubeconfigs }}
+              - secret:
+                  name: {{ .secretName }}
+                  items:
+                    - key: {{ .key }}
+                      path: {{ default .key .filename }}
+              {{- end }}
+              # Fallback empty source so volume always mounts even with no kubeconfigs.
+              - serviceAccountToken:
+                  path: .keep
+                  expirationSeconds: 3600
+                  audience: unused-placeholder
+        {{- if .Values.existingSecrets.sshKeys }}
+        - name: ssh-keys
+          secret:
+            secretName: {{ .Values.existingSecrets.sshKeys.secretName }}
+            defaultMode: 0600
+        {{- end }}
+        {{- if and .Values.gitRepos.enabled .Values.gitRepos.repos }}
+        {{- range .Values.gitRepos.repos }}
+        - name: git-repo-{{ .name }}
+          emptyDir: {}
+        {{- end }}
+        {{- end }}
+      {{- with .Values.nodeSelector }}
+      nodeSelector:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+      {{- with .Values.tolerations }}
+      tolerations:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+      {{- with .Values.affinity }}
+      affinity:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
