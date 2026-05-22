@@ -109,6 +109,9 @@ func (h *Handler) handleMessage(ctx context.Context, msg *tgbotapi.Message) {
 		report := h.agent.StatusReport(ctx)
 		h.send(chatID, report)
 		return
+	case "/usage":
+		h.send(chatID, h.agent.UsageReport())
+		return
 	}
 
 	// Check if this is a nonce reply for a pending confirmation.
@@ -237,6 +240,7 @@ I manage your homelab Kubernetes clusters, SSH nodes, Helm releases, and git rep
 
 *Commands*
 • /status — quick health check across all clusters
+• /usage — token usage and estimated cost since startup
 • /reset — clear conversation history
 • /cancel — cancel pending confirmation
 

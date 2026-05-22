@@ -64,6 +64,7 @@ type Agent struct {
 	systemBlocks     []anthropic.TextBlockParam
 	betaSystemBlocks []anthropic.BetaTextBlockParam
 	limiter          *rate.Limiter
+	usage            *UsageTracker
 }
 
 func New(cfg *config.Config, execs *Executors, clusterNames []string) *Agent {
@@ -119,6 +120,7 @@ func New(cfg *config.Config, execs *Executors, clusterNames []string) *Agent {
 			{Text: sysPrompt, CacheControl: betaCache},
 		},
 		limiter: limiter,
+		usage:   newUsageTracker(),
 	}
 	// convertToolsToBeta JSON-round-trips tools, carrying CacheControl through.
 	a.betaTools = convertToolsToBeta(a.tools)
@@ -261,6 +263,8 @@ func (a *Agent) runTurnStd(
 		}
 
 		msgs = append(msgs, responseToParam(resp))
+		a.usage.add(resp.Usage.InputTokens, resp.Usage.OutputTokens,
+			resp.Usage.CacheCreationInputTokens, resp.Usage.CacheReadInputTokens)
 
 		if resp.StopReason == "end_turn" || !hasToolUseStd(resp.Content) {
 			return &TurnResult{AssistantText: extractTextStd(resp.Content), Messages: stdToRaw(msgs)}, nil
@@ -327,6 +331,8 @@ func (a *Agent) runTurnBeta(
 		}
 
 		betaMsgs = append(betaMsgs, betaResponseToParam(resp))
+		a.usage.add(resp.Usage.InputTokens, resp.Usage.OutputTokens,
+			resp.Usage.CacheCreationInputTokens, resp.Usage.CacheReadInputTokens)
 
 		if resp.StopReason == "end_turn" || !hasToolUseBeta(resp.Content) {
 			return &TurnResult{
@@ -536,6 +542,11 @@ func transcriptFromRaw(msgs []json.RawMessage) string {
 }
 
 // ── Status report ────────────────────────────────────────────────────────────
+
+// UsageReport returns a formatted token usage and estimated cost report.
+func (a *Agent) UsageReport() string {
+	return a.usage.report(a.cfg.ClaudeModel)
+}
 
 // StatusReport runs a canned health check across all configured clusters and
 // returns a digest suitable for sending to Telegram.
