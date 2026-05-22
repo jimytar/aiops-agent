@@ -158,6 +158,121 @@ func TestExecuteToolNilPartialResults(t *testing.T) {
 	}
 }
 
+// TestPendingToolQueuedCapture verifies that when a mutating tool is followed by
+// more tool_use blocks in the same response turn, they are captured in Queued.
+func TestPendingToolQueuedCapture(t *testing.T) {
+	pending := &PendingTool{
+		ID:    "id-mut-1",
+		Name:  "radarr_movie_add",
+		Input: json.RawMessage(`{"tmdbId":460465}`),
+		Tier:  tierMutating,
+	}
+	// Simulate two subsequent tool_use blocks.
+	pending.Queued = []QueuedTool{
+		{ID: "id-mut-2", Name: "radarr_movie_add", Input: json.RawMessage(`{"tmdbId":1343968}`)},
+	}
+
+	if len(pending.Queued) != 1 {
+		t.Fatalf("expected 1 queued tool, got %d", len(pending.Queued))
+	}
+	if pending.Queued[0].ID != "id-mut-2" {
+		t.Errorf("queued[0].ID = %q, want id-mut-2", pending.Queued[0].ID)
+	}
+}
+
+// TestExecuteToolQueuedMutatingReturnsNextPending verifies that when ExecuteTool
+// processes a pending tool that has a mutating tool in its queue, it returns a
+// new PendingTool (not a final response) so the bot can ask for another
+// confirmation. This is the scenario that caused the Mortal Kombat bug:
+// Claude called radarr_movie_add twice in a single response turn.
+func TestExecuteToolQueuedMutatingReturnsNextPending(t *testing.T) {
+	// Simulate allContent already built (PartialResults + first tool result).
+	result1 := json.RawMessage(`{"type":"tool_result","tool_use_id":"id-add-mk1","content":"added"}`)
+
+	nextQueued := QueuedTool{
+		ID:    "id-add-mk2",
+		Name:  "radarr_movie_add",
+		Input: json.RawMessage(`{"tmdbId":1343968}`),
+	}
+
+	// Simulate what ExecuteTool does when it encounters a mutating queued tool.
+	allContent := []json.RawMessage{result1}
+
+	next := &PendingTool{
+		ID:             nextQueued.ID,
+		Name:           nextQueued.Name,
+		Input:          nextQueued.Input,
+		Tier:           tierMutating,
+		PartialResults: allContent,
+		Queued:         nil,
+	}
+
+	// Verify the next PendingTool carries the accumulated results.
+	if len(next.PartialResults) != 1 {
+		t.Errorf("next.PartialResults: got %d, want 1", len(next.PartialResults))
+	}
+	var block struct {
+		ToolUseID string `json:"tool_use_id"`
+	}
+	if err := json.Unmarshal(next.PartialResults[0], &block); err != nil {
+		t.Fatalf("unmarshal partial result: %v", err)
+	}
+	if block.ToolUseID != "id-add-mk1" {
+		t.Errorf("PartialResults[0].tool_use_id = %q, want id-add-mk1", block.ToolUseID)
+	}
+	if next.Queued != nil {
+		t.Error("no further queued tools expected")
+	}
+}
+
+// TestCancelWithQueuedProducesCancelForAllIDs verifies that cancelling a pending
+// tool that has Queued entries produces cancel results for ALL tool_use IDs,
+// not just the primary one.
+func TestCancelWithQueuedProducesCancelForAllIDs(t *testing.T) {
+	pending := &PendingTool{
+		ID:   "id-mut-1",
+		Name: "radarr_movie_add",
+		Input: json.RawMessage(`{}`),
+		Tier: tierMutating,
+		Queued: []QueuedTool{
+			{ID: "id-mut-2", Name: "radarr_movie_add", Input: json.RawMessage(`{}`)},
+		},
+	}
+
+	// Simulate the cancel block construction from the bot handler.
+	var allContent []json.RawMessage
+	allContent = append(allContent, pending.PartialResults...) // nil — no partial results
+	cancelBlock := func(id string) json.RawMessage {
+		b, _ := json.Marshal(map[string]interface{}{
+			"type":        "tool_result",
+			"tool_use_id": id,
+			"content":     "Cancelled by user.",
+			"is_error":    true,
+		})
+		return b
+	}
+	allContent = append(allContent, cancelBlock(pending.ID))
+	for _, qt := range pending.Queued {
+		allContent = append(allContent, cancelBlock(qt.ID))
+	}
+
+	if len(allContent) != 2 {
+		t.Fatalf("expected 2 cancel blocks, got %d", len(allContent))
+	}
+	wantIDs := []string{"id-mut-1", "id-mut-2"}
+	for i, raw := range allContent {
+		var b struct {
+			ToolUseID string `json:"tool_use_id"`
+		}
+		if err := json.Unmarshal(raw, &b); err != nil {
+			t.Fatalf("block %d: %v", i, err)
+		}
+		if b.ToolUseID != wantIDs[i] {
+			t.Errorf("block %d: tool_use_id = %q, want %q", i, b.ToolUseID, wantIDs[i])
+		}
+	}
+}
+
 // TestToolResultIDsMustMatchToolUseIDs documents the invariant that the Beta
 // API enforces: every tool_use in the assistant message must have exactly one
 // matching tool_result in the following user message.

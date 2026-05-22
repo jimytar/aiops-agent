@@ -90,14 +90,30 @@ func (h *Handler) handleMessage(ctx context.Context, msg *tgbotapi.Message) {
 	case "/cancel":
 		if pending, ok := h.confirms.get(chatID); ok {
 			h.confirms.clear(chatID)
-			// Inject a synthetic tool_result so the message history stays valid.
-			// Without this, the assistant's tool_use block has no matching result
-			// and the next Claude API call returns 400.
 			sess := h.sessions.get(chatID)
-			userMsg := anthropic.NewUserMessage(
-				anthropic.NewToolResultBlock(pending.Tool.ID, "Cancelled by user.", true),
-			)
-			raw, _ := json.Marshal(userMsg)
+			// Build a combined user message that covers all tool_use IDs from the
+			// assistant turn: readonly PartialResults (already executed) + "Cancelled"
+			// for the pending mutating tool + "Cancelled" for any Queued tools.
+			var allContent []json.RawMessage
+			allContent = append(allContent, pending.Tool.PartialResults...)
+			cancelBlock := func(id string) json.RawMessage {
+				b, _ := json.Marshal(map[string]interface{}{
+					"type":        "tool_result",
+					"tool_use_id": id,
+					"content":     "Cancelled by user.",
+					"is_error":    true,
+				})
+				return b
+			}
+			allContent = append(allContent, cancelBlock(pending.Tool.ID))
+			for _, qt := range pending.Tool.Queued {
+				allContent = append(allContent, cancelBlock(qt.ID))
+			}
+			type rawMsg struct {
+				Role    string            `json:"role"`
+				Content []json.RawMessage `json:"content"`
+			}
+			raw, _ := json.Marshal(rawMsg{Role: "user", Content: allContent})
 			sess.append(raw)
 			h.send(chatID, "Pending confirmation cancelled.")
 		} else {

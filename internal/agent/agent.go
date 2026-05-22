@@ -26,17 +26,31 @@ import (
 // TierFor exports the tool tier so the bot layer can gate confirmations.
 func TierFor(name string) toolTier { return toolTierFor(name) }
 
+// QueuedTool is a tool_use block that follows the current pending tool in the
+// same assistant response. It awaits sequential processing after the current
+// tool is confirmed and executed.
+type QueuedTool struct {
+	ID    string
+	Name  string
+	Input json.RawMessage
+}
+
 // PendingTool holds a mutating tool call Claude requested but not yet executed.
 type PendingTool struct {
-	ID             string
-	Name           string
-	Input          json.RawMessage
-	Tier           toolTier
+	ID   string
+	Name string
+	Input json.RawMessage
+	Tier toolTier
 	// PartialResults holds serialized tool_result blocks for readonly tools that
 	// were auto-executed in the same response turn as this pending tool. They must
 	// be included in the combined user message when this tool is finally executed,
 	// so every tool_use in the assistant message has a matching tool_result.
 	PartialResults []json.RawMessage
+	// Queued holds any tool_use blocks that appeared after this one in the same
+	// assistant response and have not yet been processed. After this tool is
+	// confirmed, ExecuteTool processes Queued: readonly tools run immediately,
+	// the next mutating tool becomes a new PendingTool requiring confirmation.
+	Queued []QueuedTool
 }
 
 // Executors bundles all operation executors.
@@ -186,18 +200,51 @@ func (a *Agent) ExecuteTool(
 	duration := time.Since(start).Milliseconds()
 	audit(chatID, username, pending.Name, pending.Input, true, nonce, duration, execErr)
 
-	// Build a single user message that contains ALL tool_result blocks for this
-	// response turn: the readonly tools already executed (PartialResults) plus the
-	// result for the pending mutating tool. This ensures every tool_use block in
-	// the preceding assistant message has exactly one matching tool_result.
-	pendingBlocks := buildToolResultBlocks(pending.ID, out, execErr, a.cfg.MaxToolOutputBytes)
+	// Build allContent: readonly PartialResults + result for this tool.
 	var allContent []json.RawMessage
 	allContent = append(allContent, pending.PartialResults...)
-	for _, b := range pendingBlocks {
+	for _, b := range buildToolResultBlocks(pending.ID, out, execErr, a.cfg.MaxToolOutputBytes) {
 		if enc, err := json.Marshal(b); err == nil {
 			allContent = append(allContent, enc)
 		}
 	}
+
+	// Process Queued tools from the same assistant response turn.
+	// Readonly tools execute immediately; the next mutating tool becomes a new
+	// PendingTool returned to the bot so it can ask for confirmation.
+	remaining := pending.Queued
+	for len(remaining) > 0 {
+		qt := remaining[0]
+		remaining = remaining[1:]
+
+		if toolTierFor(qt.Name) != tierReadonly {
+			next := &PendingTool{
+				ID:             qt.ID,
+				Name:           qt.Name,
+				Input:          qt.Input,
+				Tier:           toolTierFor(qt.Name),
+				PartialResults: allContent,
+				Queued:         remaining,
+			}
+			// Return without advancing messages — bot will ask for the next confirmation.
+			return &TurnResult{Messages: messages, PendingTool: next}, nil
+		}
+
+		// Readonly: execute now and accumulate.
+		qstart := time.Now()
+		qout, qerr := a.dispatchTool(ctx, qt.Name, qt.Input)
+		audit(chatID, username, qt.Name, qt.Input, true, "", time.Since(qstart).Milliseconds(), qerr)
+		if statusUpdate != nil {
+			statusUpdate(fmt.Sprintf("_(called %s)_", qt.Name))
+		}
+		for _, b := range buildToolResultBlocks(qt.ID, qout, qerr, a.cfg.MaxToolOutputBytes) {
+			if enc, err := json.Marshal(b); err == nil {
+				allContent = append(allContent, enc)
+			}
+		}
+	}
+
+	// All tools in this response turn resolved — send combined message and continue.
 	type rawMsg struct {
 		Role    string            `json:"role"`
 		Content []json.RawMessage `json:"content"`
@@ -294,13 +341,20 @@ func (a *Agent) runTurnStd(
 		var toolResults []anthropic.ContentBlockParamUnion
 		var pendingTool *PendingTool
 
-		for _, block := range resp.Content {
+		for i, block := range resp.Content {
 			if block.Type != "tool_use" {
 				continue
 			}
 			tu := block.AsToolUse()
 			if toolTierFor(tu.Name) != tierReadonly {
 				pendingTool = &PendingTool{ID: tu.ID, Name: tu.Name, Input: tu.Input, Tier: toolTierFor(tu.Name)}
+				for _, rest := range resp.Content[i+1:] {
+					if rest.Type != "tool_use" {
+						continue
+					}
+					rtu := rest.AsToolUse()
+					pendingTool.Queued = append(pendingTool.Queued, QueuedTool{ID: rtu.ID, Name: rtu.Name, Input: rtu.Input})
+				}
 				break
 			}
 			start := time.Now()
@@ -370,7 +424,7 @@ func (a *Agent) runTurnBeta(
 		var toolResults []anthropic.BetaContentBlockParamUnion
 		var pendingTool *PendingTool
 
-		for _, block := range resp.Content {
+		for i, block := range resp.Content {
 			if block.Type != "tool_use" {
 				continue
 			}
@@ -379,6 +433,14 @@ func (a *Agent) runTurnBeta(
 
 			if toolTierFor(tu.Name) != tierReadonly {
 				pendingTool = &PendingTool{ID: tu.ID, Name: tu.Name, Input: input, Tier: toolTierFor(tu.Name)}
+				for _, rest := range resp.Content[i+1:] {
+					if rest.Type != "tool_use" {
+						continue
+					}
+					rtu := rest.AsToolUse()
+					rinput, _ := json.Marshal(rtu.Input)
+					pendingTool.Queued = append(pendingTool.Queued, QueuedTool{ID: rtu.ID, Name: rtu.Name, Input: rinput})
+				}
 				break
 			}
 			start := time.Now()
