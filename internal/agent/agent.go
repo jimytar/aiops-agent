@@ -758,9 +758,8 @@ func buildToolResultBlocks(id string, out toolOutput, execErr error, maxBytes in
 }
 
 // buildBetaToolResultBlocks builds beta tool_result content blocks.
-// Image content is not natively supported in the beta tool_result, so snapshots
-// fall back to a text-only result; Claude will describe the image in the next turn
-// via a follow-up user message containing the image (if needed).
+// When an image is present, it is embedded as a proper BetaImageBlockParam so
+// Claude receives it as a vision input (not as character-by-character text).
 func buildBetaToolResultBlocks(id string, out toolOutput, execErr error, maxBytes int) []anthropic.BetaContentBlockParamUnion {
 	if execErr != nil {
 		msg := "Error: " + execErr.Error()
@@ -772,11 +771,24 @@ func buildBetaToolResultBlocks(id string, out toolOutput, execErr error, maxByte
 		}
 	}
 	if out.ImageData != nil {
-		// Embed image as a base64 data-URI in the text so Claude can still see it.
-		dataURI := "data:" + out.MediaType + ";base64," + base64.StdEncoding.EncodeToString(out.ImageData)
-		content := out.Text + "\n" + dataURI
+		mediaType := anthropic.BetaBase64ImageSourceMediaType(out.MediaType)
+		imgBlock := anthropic.BetaImageBlockParam{
+			Source: anthropic.BetaImageBlockParamSourceUnion{
+				OfBase64: &anthropic.BetaBase64ImageSourceParam{
+					MediaType: mediaType,
+					Data:      base64.StdEncoding.EncodeToString(out.ImageData),
+				},
+			},
+		}
+		toolResult := anthropic.BetaToolResultBlockParam{
+			ToolUseID: id,
+			Content: []anthropic.BetaToolResultBlockParamContentUnion{
+				{OfText: &anthropic.BetaTextBlockParam{Text: out.Text}},
+				{OfImage: &imgBlock},
+			},
+		}
 		return []anthropic.BetaContentBlockParamUnion{
-			anthropic.NewBetaToolResultBlock(id, content, false),
+			{OfToolResult: &toolResult},
 		}
 	}
 	return []anthropic.BetaContentBlockParamUnion{

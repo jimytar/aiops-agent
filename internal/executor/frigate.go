@@ -39,9 +39,11 @@ func (e *FrigateExecutor) Cameras() (string, error) {
 	return "Cameras: " + strings.Join(names, ", "), nil
 }
 
-// Snapshot fetches the latest JPEG frame for the given camera.
+// Snapshot fetches the latest JPEG frame for the given camera, resized to 720p
+// height to keep token count manageable for Claude vision (~1280 tokens vs 200k+
+// for a full-resolution frame embedded as text).
 func (e *FrigateExecutor) Snapshot(camera string) ([]byte, string, error) {
-	url := fmt.Sprintf("%s/api/%s/latest.jpg", e.baseURL, camera)
+	url := fmt.Sprintf("%s/api/%s/latest.jpg?h=720", e.baseURL, camera)
 	resp, err := e.client.Get(url)
 	if err != nil {
 		return nil, "", fmt.Errorf("fetch snapshot: %w", err)

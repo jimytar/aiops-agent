@@ -112,18 +112,18 @@ func TestFrigateSnapshotNotFound(t *testing.T) {
 }
 
 func TestFrigateSnapshotURLConstructed(t *testing.T) {
-	called := false
+	var gotQuery string
 	mux := http.NewServeMux()
 	mux.HandleFunc("/api/cam1/latest.jpg", func(w http.ResponseWriter, r *http.Request) {
-		called = true
+		gotQuery = r.URL.RawQuery
 		w.Write([]byte("jpeg"))
 	})
 	srv, exec := newFrigateServer(mux)
 	defer srv.Close()
 
 	exec.Snapshot("cam1")
-	if !called {
-		t.Error("expected /api/cam1/latest.jpg to be called")
+	if gotQuery != "h=720" {
+		t.Errorf("expected ?h=720 query param, got %q", gotQuery)
 	}
 }
 

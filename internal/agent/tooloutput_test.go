@@ -83,9 +83,19 @@ func TestBuildBetaToolResultBlocksWithImage(t *testing.T) {
 		MediaType: "image/jpeg",
 	}
 	blocks := buildBetaToolResultBlocks("id1", out, nil, 1024)
-	// Beta path embeds image as data-URI in a single text block
+	// Beta path: one BetaContentBlockParamUnion wrapping a BetaToolResultBlockParam
+	// that itself contains text + image content items.
 	if len(blocks) != 1 {
 		t.Fatalf("expected 1 beta block for image, got %d", len(blocks))
+	}
+	if blocks[0].OfToolResult == nil {
+		t.Fatal("expected OfToolResult to be set")
+	}
+	if len(blocks[0].OfToolResult.Content) != 2 {
+		t.Fatalf("expected 2 content items (text+image) inside tool_result, got %d", len(blocks[0].OfToolResult.Content))
+	}
+	if blocks[0].OfToolResult.Content[1].OfImage == nil {
+		t.Fatal("expected second content item to be an image block")
 	}
 }
 
