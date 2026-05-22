@@ -81,18 +81,32 @@ func New(cfg *config.Config, execs *Executors, clusterNames []string) *Agent {
 		clientOpt = option.WithAPIKey(cfg.AnthropicAPIKey)
 	}
 
+	sysPrompt := cfg.SystemPrompt
+	if cfg.FrigateURL != "" {
+		sysPrompt += frigateSystemPromptSection
+	}
+
 	a := &Agent{
 		client:       anthropic.NewClient(clientOpt),
 		cfg:          cfg,
 		executors:    execs,
 		tools:        buildTools(clusterNames, cfg.Tools, cfg.FrigateURL),
-		systemPrompt: cfg.SystemPrompt,
+		systemPrompt: sysPrompt,
 		limiter:      limiter,
 	}
 	a.betaTools = convertToolsToBeta(a.tools)
 	a.mcpServers = buildMCPServers(cfg.MCPServers)
 	return a
 }
+
+const frigateSystemPromptSection = `
+
+FRIGATE NVR:
+You also have access to Frigate NVR camera tools:
+- frigate_cameras: list all configured cameras
+- frigate_snapshot: fetch the latest JPEG frame from a camera and visually analyze the scene
+- frigate_events: query recent detection events (filter by camera, label such as person/car/dog, limit)
+Use these tools directly when the user asks about cameras, snapshots, or motion/object detection events.`
 
 // TurnResult is returned by RunTurn.
 type TurnResult struct {
