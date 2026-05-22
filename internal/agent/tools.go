@@ -34,6 +34,7 @@ var defaultTiers = map[string]toolTier{
 	"helm_rollback":      tierMutating,
 	"git_pull":           tierMutating,
 	"git_push":           tierMutating,
+	"git_tag":            tierMutating,
 	"ssh_exec":           tierMutating,
 	"kubectl_delete":     tierDestructive,
 	"flux_reconcile":     tierMutating,
@@ -401,6 +402,16 @@ func buildTools(clusterNames []string, cfg config.ToolsConfig, frigateURL string
 					"message":  prop("string", "Commit message"),
 				},
 				Required: []string{"message"},
+			}),
+		tool("git_tag", "Create an annotated git tag and push it to origin. Used to trigger CI release pipelines. REQUIRES USER CONFIRMATION.",
+			anthropic.ToolInputSchemaParam{
+				Type: "object",
+				Properties: map[string]interface{}{
+					"repo_dir": prop("string", "Repository directory (uses first configured repo if omitted)"),
+					"tag":      prop("string", "Tag name, e.g. v0.3.0"),
+					"message":  prop("string", "Annotated tag message (defaults to tag name if omitted)"),
+				},
+				Required: []string{"tag"},
 			}),
 	}
 
