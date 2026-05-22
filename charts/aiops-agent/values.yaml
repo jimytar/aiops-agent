@@ -14,6 +14,9 @@ agent:
   webhookPort: 8080
   confirmationTimeoutSeconds: 300
   maxToolOutputBytes: 8192
+  # execTimeoutSeconds: 120     # timeout for kubectl exec and SSH commands
+  # runbookDir: ""              # override default /etc/aiops/runbooks mount path
+  # systemPrompt: ""            # override the entire system prompt (multiline string)
 
   # Telegram chat IDs allowed to interact with the bot.
   # Can also be set via ALLOWED_CHAT_IDS env (comma-separated).

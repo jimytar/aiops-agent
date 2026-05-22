@@ -11,6 +11,16 @@ data:
     webhookPort: {{ .Values.agent.webhookPort }}
     confirmationTimeoutSeconds: {{ .Values.agent.confirmationTimeoutSeconds }}
     maxToolOutputBytes: {{ .Values.agent.maxToolOutputBytes }}
+    {{- if .Values.agent.execTimeoutSeconds }}
+    execTimeoutSeconds: {{ .Values.agent.execTimeoutSeconds }}
+    {{- end }}
+    {{- if .Values.agent.systemPrompt }}
+    systemPrompt: |
+      {{- .Values.agent.systemPrompt | nindent 6 }}
+    {{- end }}
+    {{- if .Values.agent.runbookDir }}
+    runbookDir: {{ .Values.agent.runbookDir | quote }}
+    {{- end }}
     kubeconfigDir: /etc/aiops/kubeconfigs
     sshKeyDir: /etc/aiops/ssh
     {{- if .Values.agent.allowedChatIDs }}
@@ -82,6 +92,35 @@ data:
         {{- end }}
     {{- if .Values.agent.frigateURL }}
     frigateURL: {{ .Values.agent.frigateURL | quote }}
+    {{- end }}
+    {{- if .Values.agent.httpIntegrations }}
+    httpIntegrations:
+      {{- range .Values.agent.httpIntegrations }}
+      - name: {{ .name | quote }}
+        baseURL: {{ .baseURL | quote }}
+        apiKeyEnv: {{ .apiKeyEnv | quote }}
+        {{- if .apiKeyHeader }}
+        apiKeyHeader: {{ .apiKeyHeader | quote }}
+        {{- end }}
+        {{- if .defaults }}
+        defaults:
+          {{- .defaults | toYaml | nindent 10 }}
+        {{- end }}
+        {{- if .endpoints }}
+        endpoints:
+          {{- range .endpoints }}
+          - name: {{ .name | quote }}
+            path: {{ .path | quote }}
+            {{- if .method }}
+            method: {{ .method | quote }}
+            {{- end }}
+            description: {{ .description | quote }}
+            {{- if .tier }}
+            tier: {{ .tier | quote }}
+            {{- end }}
+          {{- end }}
+        {{- end }}
+      {{- end }}
     {{- end }}
     {{- if .Values.agent.mcpServers }}
     mcpServers:
