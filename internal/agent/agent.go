@@ -13,6 +13,7 @@ import (
 	"time"
 
 	"github.com/anthropics/anthropic-sdk-go"
+	"github.com/anthropics/anthropic-sdk-go/option"
 	"github.com/jimytar/aiops-agent/internal/config"
 	"github.com/jimytar/aiops-agent/internal/executor"
 	"golang.org/x/time/rate"
@@ -59,8 +60,15 @@ func New(cfg *config.Config, execs *Executors, clusterNames []string) *Agent {
 	// 1 request/second sustained, burst of 3 — stays well within Anthropic limits.
 	limiter := rate.NewLimiter(rate.Every(time.Second), 3)
 
+	var clientOpt option.RequestOption
+	if strings.HasPrefix(cfg.AnthropicAPIKey, "sk-ant-oat") {
+		clientOpt = option.WithAuthToken(cfg.AnthropicAPIKey)
+	} else {
+		clientOpt = option.WithAPIKey(cfg.AnthropicAPIKey)
+	}
+
 	a := &Agent{
-		client:       anthropic.NewClient(),
+		client:       anthropic.NewClient(clientOpt),
 		cfg:          cfg,
 		executors:    execs,
 		tools:        buildTools(clusterNames, cfg.Tools),
