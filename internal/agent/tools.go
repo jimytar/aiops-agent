@@ -41,6 +41,9 @@ var defaultTiers = map[string]toolTier{
 	"git_diff":           tierReadonly,
 	"write_file":         tierMutating,
 	"git_commit":         tierMutating,
+	"frigate_cameras":    tierReadonly,
+	"frigate_snapshot":   tierReadonly,
+	"frigate_events":     tierReadonly,
 }
 
 // effectiveTiers is built at startup by applyToolsConfig and used at runtime.
@@ -86,7 +89,7 @@ func parseTier(s string) (toolTier, bool) {
 	return 0, false
 }
 
-func buildTools(clusterNames []string, cfg config.ToolsConfig) []anthropic.ToolUnionParam {
+func buildTools(clusterNames []string, cfg config.ToolsConfig, frigateURL string) []anthropic.ToolUnionParam {
 	clusterEnum := clusterNames
 	if len(clusterEnum) == 0 {
 		clusterEnum = []string{"bastion"}
@@ -336,6 +339,33 @@ func buildTools(clusterNames []string, cfg config.ToolsConfig) []anthropic.ToolU
 				},
 				Required: []string{"message"},
 			}),
+	}
+
+	if frigateURL != "" {
+		all = append(all,
+			tool("frigate_cameras", "List all camera names configured in Frigate NVR.",
+				anthropic.ToolInputSchemaParam{
+					Type:       "object",
+					Properties: map[string]interface{}{},
+				}),
+			tool("frigate_snapshot", "Fetch the latest camera snapshot from Frigate NVR and visually analyze it.",
+				anthropic.ToolInputSchemaParam{
+					Type: "object",
+					Properties: map[string]interface{}{
+						"camera": prop("string", "Camera name (use frigate_cameras to list available cameras)"),
+					},
+					Required: []string{"camera"},
+				}),
+			tool("frigate_events", "Query recent detection events from Frigate NVR.",
+				anthropic.ToolInputSchemaParam{
+					Type: "object",
+					Properties: map[string]interface{}{
+						"camera": prop("string", "Filter by camera name (optional)"),
+						"label":  prop("string", "Filter by object label, e.g. person, car, dog, cat (optional)"),
+						"limit":  prop("integer", "Maximum number of events to return (default 10)"),
+					},
+				}),
+		)
 	}
 
 	return filterTools(all, cfg.Disabled)

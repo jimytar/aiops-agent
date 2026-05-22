@@ -49,6 +49,12 @@ func run() error {
 	log.Printf("loaded %d SSH keys, known hosts: %v", 0, sshExec.KnownHosts())
 
 	// Assemble executors.
+	var frigateExec *executor.FrigateExecutor
+	if cfg.FrigateURL != "" {
+		frigateExec = executor.NewFrigateExecutor(cfg.FrigateURL)
+		log.Printf("frigate integration enabled: %s", cfg.FrigateURL)
+	}
+
 	execs := &agent.Executors{
 		Kubectl: executor.NewKubectlExecutor(k8sClients, cfg.KubectlExecAllowedCommands),
 		SSH:     sshExec,
@@ -56,6 +62,7 @@ func run() error {
 		Helm:    executor.NewHelmExecutor(cfg),
 		Flux:    executor.NewFluxExecutor(k8sClients),
 		File:    executor.NewFileExecutor(cfg.GitRepoDirs),
+		Frigate: frigateExec,
 	}
 
 	// Agent.

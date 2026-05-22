@@ -3,6 +3,7 @@ package agent
 import (
 	"bytes"
 	"context"
+	"encoding/base64"
 	"encoding/json"
 	"fmt"
 	"log"
@@ -39,6 +40,14 @@ type Executors struct {
 	Helm    *executor.HelmExecutor
 	Flux    *executor.FluxExecutor
 	File    *executor.FileExecutor
+	Frigate *executor.FrigateExecutor // nil when FrigateURL is not configured
+}
+
+// toolOutput is returned by dispatchTool. ImageData is non-nil only for snapshot tools.
+type toolOutput struct {
+	Text      string
+	ImageData []byte
+	MediaType string
 }
 
 // Agent runs Claude conversations with tool_use.
@@ -76,7 +85,7 @@ func New(cfg *config.Config, execs *Executors, clusterNames []string) *Agent {
 		client:       anthropic.NewClient(clientOpt),
 		cfg:          cfg,
 		executors:    execs,
-		tools:        buildTools(clusterNames, cfg.Tools),
+		tools:        buildTools(clusterNames, cfg.Tools, cfg.FrigateURL),
 		systemPrompt: cfg.SystemPrompt,
 		limiter:      limiter,
 	}
@@ -120,19 +129,11 @@ func (a *Agent) ExecuteTool(
 	statusUpdate func(string),
 ) (*TurnResult, error) {
 	start := time.Now()
-	result, execErr := a.dispatchTool(ctx, pending.Name, pending.Input)
+	out, execErr := a.dispatchTool(ctx, pending.Name, pending.Input)
 	duration := time.Since(start).Milliseconds()
 	audit(chatID, username, pending.Name, pending.Input, true, nonce, duration, execErr)
 
-	content := result
-	if execErr != nil {
-		content = fmt.Sprintf("Error: %v", execErr)
-	}
-	content = truncate(content, a.cfg.MaxToolOutputBytes)
-
-	userMsg := anthropic.NewUserMessage(
-		anthropic.NewToolResultBlock(pending.ID, content, execErr != nil),
-	)
+	userMsg := anthropic.NewUserMessage(buildToolResultBlocks(pending.ID, out, execErr, a.cfg.MaxToolOutputBytes)...)
 	raw, _ := json.Marshal(userMsg)
 	msgs := append(messages, raw)
 	return a.RunTurn(ctx, msgs, chatID, username, statusUpdate)
@@ -233,14 +234,13 @@ func (a *Agent) runTurnStd(
 				break
 			}
 			start := time.Now()
-			result, execErr := a.dispatchTool(ctx, tu.Name, tu.Input)
+			out, execErr := a.dispatchTool(ctx, tu.Name, tu.Input)
 			duration := time.Since(start).Milliseconds()
 			audit(chatID, username, tu.Name, tu.Input, true, "", duration, execErr)
-			content := truncate(orErr(result, execErr), a.cfg.MaxToolOutputBytes)
 			if statusUpdate != nil {
 				statusUpdate(fmt.Sprintf("_(called %s)_", tu.Name))
 			}
-			toolResults = append(toolResults, anthropic.NewToolResultBlock(tu.ID, content, execErr != nil))
+			toolResults = append(toolResults, buildToolResultBlocks(tu.ID, out, execErr, a.cfg.MaxToolOutputBytes)...)
 		}
 
 		if pendingTool != nil {
@@ -305,14 +305,13 @@ func (a *Agent) runTurnBeta(
 				break
 			}
 			start := time.Now()
-			result, execErr := a.dispatchTool(ctx, tu.Name, input)
+			out, execErr := a.dispatchTool(ctx, tu.Name, input)
 			duration := time.Since(start).Milliseconds()
 			audit(chatID, username, tu.Name, input, true, "", duration, execErr)
-			content := truncate(orErr(result, execErr), a.cfg.MaxToolOutputBytes)
 			if statusUpdate != nil {
 				statusUpdate(fmt.Sprintf("_(called %s)_", tu.Name))
 			}
-			toolResults = append(toolResults, anthropic.NewBetaToolResultBlock(tu.ID, content, execErr != nil))
+			toolResults = append(toolResults, buildBetaToolResultBlocks(tu.ID, out, execErr, a.cfg.MaxToolOutputBytes)...)
 		}
 
 		if pendingTool != nil {
@@ -330,10 +329,12 @@ func (a *Agent) runTurnBeta(
 
 // ── Tool dispatch ────────────────────────────────────────────────────────────
 
-func (a *Agent) dispatchTool(ctx context.Context, name string, input json.RawMessage) (string, error) {
+func (a *Agent) dispatchTool(ctx context.Context, name string, input json.RawMessage) (toolOutput, error) {
+	txt := func(s string, err error) (toolOutput, error) { return toolOutput{Text: s}, err }
+
 	var args map[string]interface{}
 	if err := json.Unmarshal(input, &args); err != nil {
-		return "", fmt.Errorf("parse tool input: %w", err)
+		return toolOutput{}, fmt.Errorf("parse tool input: %w", err)
 	}
 	str := func(key string) string { v, _ := args[key].(string); return v }
 	intVal := func(key string, def int64) int64 {
@@ -348,56 +349,78 @@ func (a *Agent) dispatchTool(ctx context.Context, name string, input json.RawMes
 
 	switch name {
 	case "kubectl_get":
-		return a.executors.Kubectl.Get(ctx, str("resource"), str("name"), str("namespace"), str("cluster"))
+		return txt(a.executors.Kubectl.Get(ctx, str("resource"), str("name"), str("namespace"), str("cluster")))
 	case "kubectl_describe":
-		return a.executors.Kubectl.Describe(ctx, str("resource"), str("name"), str("namespace"), str("cluster"))
+		return txt(a.executors.Kubectl.Describe(ctx, str("resource"), str("name"), str("namespace"), str("cluster")))
 	case "kubectl_logs":
-		return a.executors.Kubectl.Logs(ctx, str("pod"), str("namespace"), str("cluster"), str("container"), intVal("tail_lines", 100))
+		return txt(a.executors.Kubectl.Logs(ctx, str("pod"), str("namespace"), str("cluster"), str("container"), intVal("tail_lines", 100)))
 	case "kubectl_get_events":
-		return a.executors.Kubectl.GetEvents(ctx, str("namespace"), str("cluster"))
+		return txt(a.executors.Kubectl.GetEvents(ctx, str("namespace"), str("cluster")))
 	case "kubectl_restart":
-		return a.executors.Kubectl.Restart(ctx, str("deployment"), str("namespace"), str("cluster"))
+		return txt(a.executors.Kubectl.Restart(ctx, str("deployment"), str("namespace"), str("cluster")))
 	case "kubectl_scale":
-		return a.executors.Kubectl.Scale(ctx, str("deployment"), str("namespace"), str("cluster"), int32(intVal("replicas", 1)))
+		return txt(a.executors.Kubectl.Scale(ctx, str("deployment"), str("namespace"), str("cluster"), int32(intVal("replicas", 1))))
 	case "kubectl_rollout":
-		return fmt.Sprintf("Use kubectl_describe on deployment %s/%s to check rollout status.", str("namespace"), str("deployment")), nil
+		return txt(fmt.Sprintf("Use kubectl_describe on deployment %s/%s to check rollout status.", str("namespace"), str("deployment")), nil)
 	case "kubectl_delete":
-		return a.executors.Kubectl.Delete(ctx, str("resource"), str("name"), str("namespace"), str("cluster"))
+		return txt(a.executors.Kubectl.Delete(ctx, str("resource"), str("name"), str("namespace"), str("cluster")))
 	case "helm_list":
-		return a.executors.Helm.List(str("namespace"), str("cluster"))
+		return txt(a.executors.Helm.List(str("namespace"), str("cluster")))
 	case "helm_status":
-		return a.executors.Helm.Status(str("release"), str("namespace"), str("cluster"))
+		return txt(a.executors.Helm.Status(str("release"), str("namespace"), str("cluster")))
 	case "helm_rollback":
-		return a.executors.Helm.Rollback(str("release"), str("namespace"), str("cluster"), int(intVal("revision", 0)))
+		return txt(a.executors.Helm.Rollback(str("release"), str("namespace"), str("cluster"), int(intVal("revision", 0))))
 	case "git_status":
-		return a.executors.Git.Status()
+		return txt(a.executors.Git.Status())
 	case "git_log":
-		return a.executors.Git.Log(str("repo_dir"), int(intVal("limit", 10)))
+		return txt(a.executors.Git.Log(str("repo_dir"), int(intVal("limit", 10))))
 	case "git_pull":
-		return a.executors.Git.Pull(str("repo_dir"))
+		return txt(a.executors.Git.Pull(str("repo_dir")))
 	case "git_push":
-		return a.executors.Git.Push(str("repo_dir"))
+		return txt(a.executors.Git.Push(str("repo_dir")))
 	case "ssh_exec_readonly":
-		return a.executors.SSH.ExecReadonly(str("host"), str("command"))
+		return txt(a.executors.SSH.ExecReadonly(str("host"), str("command")))
 	case "ssh_exec":
-		return a.executors.SSH.Exec(str("host"), str("command"))
+		return txt(a.executors.SSH.Exec(str("host"), str("command")))
 	case "flux_reconcile":
-		return a.executors.Flux.Reconcile(ctx, str("kind"), str("name"), str("namespace"), str("cluster"))
+		return txt(a.executors.Flux.Reconcile(ctx, str("kind"), str("name"), str("namespace"), str("cluster")))
 	case "kubectl_exec":
-		return a.executors.Kubectl.Exec(ctx, str("pod"), str("namespace"), str("container"), str("cluster"), str("command"))
+		return txt(a.executors.Kubectl.Exec(ctx, str("pod"), str("namespace"), str("container"), str("cluster"), str("command")))
 	case "list_files":
-		depth := int(intVal("max_depth", 3))
-		return a.executors.File.ListFiles(str("dir"), depth)
+		return txt(a.executors.File.ListFiles(str("dir"), int(intVal("max_depth", 3))))
 	case "read_file":
-		return a.executors.File.ReadFile(str("path"))
+		return txt(a.executors.File.ReadFile(str("path")))
 	case "write_file":
-		return a.executors.File.WriteFile(str("path"), str("content"))
+		return txt(a.executors.File.WriteFile(str("path"), str("content")))
 	case "git_diff":
-		return a.executors.Git.Diff(str("repo_dir"))
+		return txt(a.executors.Git.Diff(str("repo_dir")))
 	case "git_commit":
-		return a.executors.Git.Commit(str("repo_dir"), str("message"))
+		return txt(a.executors.Git.Commit(str("repo_dir"), str("message")))
+	case "frigate_cameras":
+		if a.executors.Frigate == nil {
+			return txt("Frigate is not configured.", nil)
+		}
+		return txt(a.executors.Frigate.Cameras())
+	case "frigate_events":
+		if a.executors.Frigate == nil {
+			return txt("Frigate is not configured.", nil)
+		}
+		return txt(a.executors.Frigate.Events(str("camera"), str("label"), int(intVal("limit", 10))))
+	case "frigate_snapshot":
+		if a.executors.Frigate == nil {
+			return txt("Frigate is not configured.", nil)
+		}
+		imgData, mediaType, err := a.executors.Frigate.Snapshot(str("camera"))
+		if err != nil {
+			return toolOutput{}, err
+		}
+		return toolOutput{
+			Text:      fmt.Sprintf("Latest snapshot from camera %q:", str("camera")),
+			ImageData: imgData,
+			MediaType: mediaType,
+		}, nil
 	default:
-		return "", fmt.Errorf("unknown tool: %s", name)
+		return toolOutput{}, fmt.Errorf("unknown tool: %s", name)
 	}
 }
 
@@ -710,14 +733,55 @@ func extractTextBeta(content []anthropic.BetaContentBlockUnion) string {
 	return strings.Join(parts, "\n")
 }
 
-func orErr(result string, err error) string {
-	if err != nil {
-		if result != "" {
-			return result + "\nError: " + err.Error()
+
+// buildToolResultBlocks builds standard tool_result content blocks.
+// If out.ImageData is set, the result contains a text block + an image block.
+func buildToolResultBlocks(id string, out toolOutput, execErr error, maxBytes int) []anthropic.ContentBlockParamUnion {
+	if execErr != nil {
+		msg := "Error: " + execErr.Error()
+		if out.Text != "" {
+			msg = out.Text + "\n" + msg
 		}
-		return "Error: " + err.Error()
+		return []anthropic.ContentBlockParamUnion{
+			anthropic.NewToolResultBlock(id, truncate(msg, maxBytes), true),
+		}
 	}
-	return result
+	if out.ImageData != nil {
+		return []anthropic.ContentBlockParamUnion{
+			anthropic.NewToolResultBlock(id, out.Text, false),
+			anthropic.NewImageBlockBase64(out.MediaType, base64.StdEncoding.EncodeToString(out.ImageData)),
+		}
+	}
+	return []anthropic.ContentBlockParamUnion{
+		anthropic.NewToolResultBlock(id, truncate(out.Text, maxBytes), false),
+	}
+}
+
+// buildBetaToolResultBlocks builds beta tool_result content blocks.
+// Image content is not natively supported in the beta tool_result, so snapshots
+// fall back to a text-only result; Claude will describe the image in the next turn
+// via a follow-up user message containing the image (if needed).
+func buildBetaToolResultBlocks(id string, out toolOutput, execErr error, maxBytes int) []anthropic.BetaContentBlockParamUnion {
+	if execErr != nil {
+		msg := "Error: " + execErr.Error()
+		if out.Text != "" {
+			msg = out.Text + "\n" + msg
+		}
+		return []anthropic.BetaContentBlockParamUnion{
+			anthropic.NewBetaToolResultBlock(id, truncate(msg, maxBytes), true),
+		}
+	}
+	if out.ImageData != nil {
+		// Embed image as a base64 data-URI in the text so Claude can still see it.
+		dataURI := "data:" + out.MediaType + ";base64," + base64.StdEncoding.EncodeToString(out.ImageData)
+		content := out.Text + "\n" + dataURI
+		return []anthropic.BetaContentBlockParamUnion{
+			anthropic.NewBetaToolResultBlock(id, content, false),
+		}
+	}
+	return []anthropic.BetaContentBlockParamUnion{
+		anthropic.NewBetaToolResultBlock(id, truncate(out.Text, maxBytes), false),
+	}
 }
 
 func truncate(s string, max int) string {

@@ -49,6 +49,10 @@ type Config struct {
 
 	// Tools controls which built-in tools are available and their confirmation tiers.
 	Tools ToolsConfig `yaml:"tools"`
+
+	// FrigateURL is the base URL of the Frigate NVR instance (e.g. https://nvr-int.example.com).
+	// Leave empty to disable Frigate tools.
+	FrigateURL string `yaml:"frigateURL"`
 }
 
 // ToolsConfig controls the agent's built-in tool set.

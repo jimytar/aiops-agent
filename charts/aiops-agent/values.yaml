@@ -91,6 +91,9 @@ agent:
     #   kubectl_restart: readonly   # skip confirmation for restarts
     #   git_pull: readonly          # skip confirmation for git pull
 
+  # Frigate NVR base URL. Leave empty to disable camera tools.
+  frigateURL: ""
+
   # MCP servers Claude connects to via the Beta API.
   # tokenSecretName/tokenSecretKey point to a pre-existing SOPS-encrypted secret;
   # the value is injected as an env var named by tokenEnv.

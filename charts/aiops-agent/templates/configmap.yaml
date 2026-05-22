@@ -80,6 +80,9 @@ data:
         {{- else }}
         {}
         {{- end }}
+    {{- if .Values.agent.frigateURL }}
+    frigateURL: {{ .Values.agent.frigateURL | quote }}
+    {{- end }}
     {{- if .Values.agent.mcpServers }}
     mcpServers:
       {{- range .Values.agent.mcpServers }}
