@@ -616,8 +616,46 @@ func (a *Agent) SummarizeHistory(ctx context.Context, messages []json.RawMessage
 	if len(messages) <= keepRecent {
 		return messages, nil
 	}
-	older := messages[:len(messages)-keepRecent]
-	recent := messages[len(messages)-keepRecent:]
+
+	// Walk backward from the naive split point until we land on a clean
+	// plain-text user message. This prevents splitting a tool_use block
+	// (assistant) from its paired tool_result blocks (user), which would
+	// cause the beta API to reject the conversation with a 400 error.
+	recentStart := len(messages) - keepRecent
+	for recentStart > 0 {
+		var m struct {
+			Role    string `json:"role"`
+			Content []struct {
+				Type string `json:"type"`
+			} `json:"content"`
+		}
+		if err := json.Unmarshal(messages[recentStart], &m); err != nil {
+			break
+		}
+		if m.Role != "user" {
+			recentStart--
+			continue
+		}
+		hasToolResult := false
+		for _, c := range m.Content {
+			if c.Type == "tool_result" {
+				hasToolResult = true
+				break
+			}
+		}
+		if hasToolResult {
+			recentStart--
+			continue
+		}
+		break
+	}
+	if recentStart == 0 {
+		// All messages are part of tool exchanges; nothing safe to condense.
+		return messages, nil
+	}
+
+	older := messages[:recentStart]
+	recent := messages[recentStart:]
 
 	transcript := transcriptFromRaw(older)
 
