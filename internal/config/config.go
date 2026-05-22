@@ -54,6 +54,11 @@ type Config struct {
 	// FrigateURL is the base URL of the Frigate NVR instance (e.g. https://nvr-int.example.com).
 	// Leave empty to disable Frigate tools.
 	FrigateURL string `yaml:"frigateURL"`
+
+	// RunbookDir is a directory of *.md files that are appended to the system
+	// prompt at startup. Mount a ConfigMap here to give Claude domain-specific
+	// operational knowledge without rebuilding the image.
+	RunbookDir string `yaml:"runbookDir"`
 }
 
 // ToolsConfig controls the agent's built-in tool set.
@@ -194,6 +199,7 @@ func defaults() *Config {
 			"mongosh ",
 		},
 		SystemPrompt: defaultSystemPrompt,
+		RunbookDir:   "/etc/aiops/runbooks",
 	}
 }
 

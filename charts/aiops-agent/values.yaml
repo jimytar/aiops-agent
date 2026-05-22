@@ -114,6 +114,36 @@ agent:
   #     deniedTools: []
   #       - homeassistant.restart
 
+# Runbooks — operational knowledge injected into Claude's system prompt at startup.
+# Any *.md file mounted at /etc/aiops/runbooks/ is appended automatically.
+#
+# Two mutually exclusive options:
+#   inline          — define runbooks directly in values.yaml; the chart generates
+#                     a ConfigMap named <release>-runbooks and mounts it.
+#   existingConfigMap — name of a pre-existing ConfigMap whose keys are *.md files.
+#                       Use this when runbooks are managed outside of Helm (e.g. SOPS,
+#                       a separate GitOps repo, or kubectl apply).
+runbooks:
+  # inline: {}
+  #   oom-runbook.md: |
+  #     ## OOMKilled Runbook
+  #     When a pod is OOMKilled:
+  #     1. Check current memory requests: kubectl describe pod <name>
+  #     2. Check actual usage trend in Grafana dashboard (namespace/pod memory panel)
+  #     3. If usage consistently exceeds requests, bump resources.requests.memory
+  #        and resources.limits.memory in the deployment manifest and git_push.
+  #     4. If spike is abnormal (e.g. memory leak), restart and open an investigation.
+  #
+  #   deploy-runbook.md: |
+  #     ## Deployment Runbook
+  #     Standard deploy process:
+  #     1. Update the image tag in charts/<app>/values.yaml
+  #     2. git_commit + git_push to trigger Flux reconciliation
+  #     3. Watch rollout: kubectl rollout status deployment/<name>
+  #     4. Verify readiness probes pass before declaring success.
+  inline: {}
+  # existingConfigMap: aiops-runbooks
+
 # Names of pre-existing Secrets (SOPS-encrypted, created separately).
 existingSecrets:
   telegramToken:

@@ -17,6 +17,9 @@ spec:
       annotations:
         # Force rollout when ConfigMap changes.
         checksum/config: {{ include (print $.Template.BasePath "/configmap.yaml") . | sha256sum }}
+        {{- if or .Values.runbooks.inline .Values.runbooks.existingConfigMap }}
+        checksum/runbooks: {{ include (print $.Template.BasePath "/runbooks-configmap.yaml") . | sha256sum }}
+        {{- end }}
     spec:
       serviceAccountName: {{ include "aiops-agent.serviceAccountName" . }}
       securityContext:
@@ -139,6 +142,11 @@ spec:
               mountPath: {{ .mountPath }}
             {{- end }}
             {{- end }}
+            {{- if or .Values.runbooks.inline .Values.runbooks.existingConfigMap }}
+            - name: runbooks
+              mountPath: /etc/aiops/runbooks
+              readOnly: true
+            {{- end }}
       volumes:
         - name: config
           configMap:
@@ -169,6 +177,11 @@ spec:
         - name: git-repo-{{ .name }}
           emptyDir: {}
         {{- end }}
+        {{- end }}
+        {{- if or .Values.runbooks.inline .Values.runbooks.existingConfigMap }}
+        - name: runbooks
+          configMap:
+            name: {{ if .Values.runbooks.existingConfigMap }}{{ .Values.runbooks.existingConfigMap }}{{ else }}{{ include "aiops-agent.fullname" . }}-runbooks{{ end }}
         {{- end }}
       {{- with .Values.nodeSelector }}
       nodeSelector:

@@ -1,0 +1,14 @@
+{{- if .Values.runbooks.inline }}
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: {{ include "aiops-agent.fullname" . }}-runbooks
+  namespace: {{ .Release.Namespace }}
+  labels:
+    {{- include "aiops-agent.labels" . | nindent 4 }}
+data:
+  {{- range $name, $content := .Values.runbooks.inline }}
+  {{ $name }}: |
+    {{- $content | nindent 4 }}
+  {{- end }}
+{{- end }}

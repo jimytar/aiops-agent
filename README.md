@@ -130,6 +130,8 @@ GitRepoDirs                []string   // auto-populated from gitRepos.repos[*].m
 MCPServers                 []MCPServerConfig{Name, URL, TokenEnv string; AllowedTools, DeniedTools []string}
 Tools                      ToolsConfig{Disabled []string; Tiers map[string]string}
 KubectlExecAllowedCommands []string
+FrigateURL                 string     // base URL of Frigate NVR; leave empty to disable
+RunbookDir                 string     // directory of *.md files appended to system prompt (default /etc/aiops/runbooks)
 ```
 
 ### Environment variable overrides
@@ -231,6 +233,15 @@ gitRepos:
       url: https://github.com/youruser/deployments
       mountPath: /repos/deployments
 
+runbooks:
+  inline:
+    oom-runbook.md: |
+      ## OOMKilled Runbook
+      When a pod is OOMKilled bump resources in the manifest and git_push.
+    deploy-runbook.md: |
+      ## Deployment Runbook
+      Always run kubectl rollout status after a deploy and confirm readiness probes pass.
+
 existingSecrets:
   telegramToken:
     secretName: aiops-telegram-token
@@ -252,6 +263,71 @@ ingress:
   enabled: true
   className: traefik
   host: aiops.example.com
+```
+
+---
+
+## Runbooks — injecting operational knowledge
+
+Any `*.md` file mounted at `/etc/aiops/runbooks/` is appended to Claude's system prompt at startup under a `RUNBOOKS AND OPERATIONAL KNOWLEDGE` section. Use this to teach the agent team-specific procedures, naming conventions, escalation paths, or domain context — without rebuilding the image.
+
+The prompt cache covers the runbooks (1 h TTL), so adding runbooks does not meaningfully increase per-turn cost.
+
+### Option A — inline in values.yaml (chart generates the ConfigMap)
+
+```yaml
+runbooks:
+  inline:
+    oom-runbook.md: |
+      ## OOMKilled Runbook
+      When a pod is OOMKilled:
+      1. Check current memory requests: kubectl describe pod <name>
+      2. Check usage trend in Grafana (namespace/pod memory panel)
+      3. If usage consistently exceeds requests, bump resources.requests.memory
+         and resources.limits.memory in the deployment manifest and git_push.
+      4. If the spike is abnormal (memory leak), restart and open an investigation.
+
+    deploy-runbook.md: |
+      ## Deployment Runbook
+      Standard deploy process:
+      1. Update the image tag in charts/<app>/values.yaml
+      2. git_commit + git_push to trigger Flux reconciliation
+      3. Watch rollout: kubectl rollout status deployment/<name>
+      4. Verify readiness probes pass before declaring success.
+```
+
+The chart creates a ConfigMap named `<release>-runbooks` and mounts it at `/etc/aiops/runbooks/`. Changing any entry triggers an automatic pod rollout via the `checksum/runbooks` annotation.
+
+### Option B — bring your own ConfigMap
+
+Manage the ConfigMap outside Helm (e.g. in a separate GitOps path, SOPS-encrypted, or via `kubectl apply`) and reference it by name:
+
+```yaml
+runbooks:
+  existingConfigMap: aiops-runbooks
+```
+
+The referenced ConfigMap must have `*.md` keys:
+
+```yaml
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: aiops-runbooks
+  namespace: aiops
+data:
+  oom-runbook.md: |
+    ## OOMKilled Runbook
+    When a pod is OOMKilled:
+    1. Check current memory requests: kubectl describe pod <name>
+    2. Check usage trend in Grafana (namespace/pod memory panel)
+    3. If usage consistently exceeds requests, bump resources in the manifest and git_push.
+
+  on-call-runbook.md: |
+    ## On-call Contacts
+    - Database issues: ping #db-oncall in Slack
+    - Network/DNS: ping @netops
+    - Payment service: escalate directly to payment-team lead
 ```
 
 ---

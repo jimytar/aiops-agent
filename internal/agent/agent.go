@@ -90,6 +90,9 @@ func New(cfg *config.Config, execs *Executors, clusterNames []string) *Agent {
 	if cfg.FrigateURL != "" {
 		sysPrompt += frigateSystemPromptSection
 	}
+	if rb := loadRunbooks(cfg.RunbookDir); rb != "" {
+		sysPrompt += rb
+	}
 
 	// System prompt and tool definitions are static for the process lifetime.
 	// Cache them with a 1h TTL so they are not re-billed on every turn.
@@ -863,6 +866,31 @@ func buildBetaToolResultBlocks(id string, out toolOutput, execErr error, maxByte
 	return []anthropic.BetaContentBlockParamUnion{
 		anthropic.NewBetaToolResultBlock(id, truncate(out.Text, maxBytes), false),
 	}
+}
+
+// loadRunbooks reads every *.md file from dir and returns them concatenated as
+// a system prompt appendix. Returns an empty string if dir is absent or empty.
+func loadRunbooks(dir string) string {
+	entries, err := os.ReadDir(dir)
+	if err != nil {
+		return ""
+	}
+	var buf strings.Builder
+	for _, e := range entries {
+		if e.IsDir() || !strings.HasSuffix(e.Name(), ".md") {
+			continue
+		}
+		data, err := os.ReadFile(dir + "/" + e.Name())
+		if err != nil {
+			log.Printf("runbooks: skipping %s: %v", e.Name(), err)
+			continue
+		}
+		if buf.Len() == 0 {
+			buf.WriteString("\n\nRUNBOOKS AND OPERATIONAL KNOWLEDGE:\n")
+		}
+		fmt.Fprintf(&buf, "\n---\n%s", data)
+	}
+	return buf.String()
 }
 
 func truncate(s string, max int) string {
