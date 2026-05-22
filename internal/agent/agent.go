@@ -42,7 +42,8 @@ type Executors struct {
 	Helm    *executor.HelmExecutor
 	Flux    *executor.FluxExecutor
 	File    *executor.FileExecutor
-	Frigate *executor.FrigateExecutor // nil when FrigateURL is not configured
+	Frigate *executor.FrigateExecutor         // nil when FrigateURL is not configured
+	HTTP    *executor.HTTPIntegrationExecutor // nil when no httpIntegrations configured
 }
 
 // toolOutput is returned by dispatchTool. ImageData is non-nil only for snapshot tools.
@@ -69,7 +70,7 @@ type Agent struct {
 
 func New(cfg *config.Config, execs *Executors, clusterNames []string) *Agent {
 	// Apply tier overrides before building the tool list.
-	applyToolsConfig(cfg.Tools)
+	applyToolsConfig(cfg.Tools, cfg.HTTPIntegrations)
 
 	// 1 request/second sustained, burst of 3 — stays well within Anthropic limits.
 	limiter := rate.NewLimiter(rate.Every(time.Second), 3)
@@ -102,7 +103,7 @@ func New(cfg *config.Config, execs *Executors, clusterNames []string) *Agent {
 	betaCache := anthropic.NewBetaCacheControlEphemeralParam()
 	betaCache.TTL = anthropic.BetaCacheControlEphemeralTTLTTL1h
 
-	tools := buildTools(clusterNames, cfg.Tools, cfg.FrigateURL)
+	tools := buildTools(clusterNames, cfg.Tools, cfg.FrigateURL, cfg.HTTPIntegrations)
 	if n := len(tools); n > 0 && tools[n-1].OfTool != nil {
 		tools[n-1].OfTool.CacheControl = stdCache
 	}
@@ -473,6 +474,40 @@ func (a *Agent) dispatchTool(ctx context.Context, name string, input json.RawMes
 			MediaType: mediaType,
 		}, nil
 	default:
+		// Dynamic HTTP integration tools: "<integration>_<endpoint>"
+		if a.executors.HTTP != nil {
+			for _, integration := range a.cfg.HTTPIntegrations {
+				prefix := integration.Name + "_"
+				if strings.HasPrefix(name, prefix) {
+					endpoint := strings.TrimPrefix(name, prefix)
+					method := "GET"
+					for _, ep := range integration.Endpoints {
+						if ep.Name == endpoint {
+							method = strings.ToUpper(ep.Method)
+							if method == "" {
+								method = "GET"
+							}
+							break
+						}
+					}
+					var qp, body string
+					if method == "GET" || method == "DELETE" {
+						if v, ok := args["query_params"]; ok {
+							if b, err := json.Marshal(v); err == nil {
+								qp = string(b)
+							}
+						}
+					} else {
+						if v, ok := args["body"]; ok {
+							if b, err := json.Marshal(v); err == nil {
+								body = string(b)
+							}
+						}
+					}
+					return txt(a.executors.HTTP.Call(ctx, integration.Name, endpoint, qp, body, a.cfg.MaxToolOutputBytes))
+				}
+			}
+		}
 		return toolOutput{}, fmt.Errorf("unknown tool: %s", name)
 	}
 }

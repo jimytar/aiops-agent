@@ -2,6 +2,8 @@ package agent
 
 import (
 	"log"
+	"net/http"
+	"strings"
 
 	"github.com/anthropics/anthropic-sdk-go"
 	"github.com/jimytar/aiops-agent/internal/config"
@@ -57,14 +59,28 @@ func toolTierFor(name string) toolTier {
 	return t
 }
 
-// applyToolsConfig merges user-supplied tier overrides into effectiveTiers.
-// Call once during agent initialisation before any RunTurn calls.
-func applyToolsConfig(cfg config.ToolsConfig) {
+// applyToolsConfig merges user-supplied tier overrides and HTTP integration
+// tiers into effectiveTiers. Call once during agent initialisation.
+func applyToolsConfig(cfg config.ToolsConfig, httpIntegrations []config.HTTPIntegrationConfig) {
 	// Copy defaults so we don't mutate the package-level map.
 	merged := make(map[string]toolTier, len(defaultTiers))
 	for k, v := range defaultTiers {
 		merged[k] = v
 	}
+	// Register tiers for HTTP integration tools.
+	for _, integration := range httpIntegrations {
+		for _, ep := range integration.Endpoints {
+			toolName := integration.Name + "_" + ep.Name
+			tier := httpEndpointDefaultTier(ep.Method)
+			if ep.Tier != "" {
+				if t, ok := parseTier(ep.Tier); ok {
+					tier = t
+				}
+			}
+			merged[toolName] = tier
+		}
+	}
+	// User overrides take final precedence.
 	for tool, tierStr := range cfg.Tiers {
 		t, ok := parseTier(tierStr)
 		if !ok {
@@ -75,6 +91,18 @@ func applyToolsConfig(cfg config.ToolsConfig) {
 		log.Printf("tools: tier override %s → %s", tool, tierStr)
 	}
 	effectiveTiers = merged
+}
+
+// httpEndpointDefaultTier returns readonly for GET, mutating for everything else.
+func httpEndpointDefaultTier(method string) toolTier {
+	switch strings.ToUpper(method) {
+	case "", "GET":
+		return tierReadonly
+	case "DELETE":
+		return tierDestructive
+	default:
+		return tierMutating
+	}
 }
 
 func parseTier(s string) (toolTier, bool) {
@@ -89,7 +117,42 @@ func parseTier(s string) (toolTier, bool) {
 	return 0, false
 }
 
-func buildTools(clusterNames []string, cfg config.ToolsConfig, frigateURL string) []anthropic.ToolUnionParam {
+func buildHTTPTools(integrations []config.HTTPIntegrationConfig) []anthropic.ToolUnionParam {
+	var tools []anthropic.ToolUnionParam
+	for _, integration := range integrations {
+		for _, ep := range integration.Endpoints {
+			method := strings.ToUpper(ep.Method)
+			if method == "" {
+				method = "GET"
+			}
+			toolName := integration.Name + "_" + ep.Name
+			props := map[string]interface{}{}
+			if method == http.MethodGet || method == "DELETE" {
+				props["query_params"] = map[string]interface{}{
+					"type":        "object",
+					"description": "Optional query parameters to append to the request URL (e.g. {\"term\": \"Breaking Bad\", \"limit\": 10})",
+				}
+			} else {
+				bodyDesc := "JSON body for the request."
+				if len(integration.Defaults) > 0 {
+					bodyDesc += " Configured defaults (qualityProfileId, rootFolderPath, etc.) are merged in automatically — only supply fields you want to override."
+				}
+				props["body"] = map[string]interface{}{
+					"type":        "object",
+					"description": bodyDesc,
+				}
+			}
+			tools = append(tools, anthropic.ToolUnionParam{OfTool: &anthropic.ToolParam{
+				Name:        toolName,
+				Description: anthropic.String(ep.Description),
+				InputSchema: anthropic.ToolInputSchemaParam{Type: "object", Properties: props},
+			}})
+		}
+	}
+	return tools
+}
+
+func buildTools(clusterNames []string, cfg config.ToolsConfig, frigateURL string, httpIntegrations []config.HTTPIntegrationConfig) []anthropic.ToolUnionParam {
 	clusterEnum := clusterNames
 	if len(clusterEnum) == 0 {
 		clusterEnum = []string{"bastion"}
@@ -367,6 +430,9 @@ func buildTools(clusterNames []string, cfg config.ToolsConfig, frigateURL string
 				}),
 		)
 	}
+
+	// Append dynamically-configured HTTP integration tools.
+	all = append(all, buildHTTPTools(httpIntegrations)...)
 
 	return filterTools(all, cfg.Disabled)
 }

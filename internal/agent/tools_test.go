@@ -119,7 +119,7 @@ func TestApplyToolsConfigOverride(t *testing.T) {
 		Tiers: map[string]string{
 			"kubectl_restart": "readonly",
 		},
-	})
+	}, nil)
 	if got := toolTierFor("kubectl_restart"); got != tierReadonly {
 		t.Errorf("after override, kubectl_restart = %v, want tierReadonly", got)
 	}
@@ -131,7 +131,7 @@ func TestApplyToolsConfigInvalidTierIgnored(t *testing.T) {
 		Tiers: map[string]string{
 			"kubectl_restart": "superuser",
 		},
-	})
+	}, nil)
 	if got := toolTierFor("kubectl_restart"); got != tierMutating {
 		t.Errorf("invalid tier should be ignored; got %v", got)
 	}
@@ -142,7 +142,7 @@ func TestApplyToolsConfigDoesNotMutateDefaults(t *testing.T) {
 	original := defaultTiers["kubectl_get"]
 	applyToolsConfig(config.ToolsConfig{
 		Tiers: map[string]string{"kubectl_get": "destructive"},
-	})
+	}, nil)
 	if defaultTiers["kubectl_get"] != original {
 		t.Error("applyToolsConfig should not mutate the defaultTiers package-level map")
 	}
@@ -152,7 +152,7 @@ func TestApplyToolsConfigDoesNotMutateDefaults(t *testing.T) {
 // --- filterTools ---
 
 func TestFilterToolsNoneDisabled(t *testing.T) {
-	tools := buildTools([]string{"bastion"}, config.ToolsConfig{}, "")
+	tools := buildTools([]string{"bastion"}, config.ToolsConfig{}, "", nil)
 	filtered := filterTools(tools, nil)
 	if len(filtered) != len(tools) {
 		t.Errorf("no disabled tools: filtered=%d, original=%d", len(filtered), len(tools))
@@ -160,7 +160,7 @@ func TestFilterToolsNoneDisabled(t *testing.T) {
 }
 
 func TestFilterToolsDisablesOne(t *testing.T) {
-	tools := buildTools([]string{"bastion"}, config.ToolsConfig{}, "")
+	tools := buildTools([]string{"bastion"}, config.ToolsConfig{}, "", nil)
 	filtered := filterTools(tools, []string{"kubectl_delete"})
 	for _, t2 := range filtered {
 		if t2.OfTool != nil && t2.OfTool.Name == "kubectl_delete" {
@@ -173,7 +173,7 @@ func TestFilterToolsDisablesOne(t *testing.T) {
 }
 
 func TestFilterToolsDisablesMultiple(t *testing.T) {
-	tools := buildTools([]string{"bastion"}, config.ToolsConfig{}, "")
+	tools := buildTools([]string{"bastion"}, config.ToolsConfig{}, "", nil)
 	disabled := []string{"kubectl_delete", "ssh_exec", "write_file"}
 	filtered := filterTools(tools, disabled)
 	disabledSet := map[string]bool{"kubectl_delete": true, "ssh_exec": true, "write_file": true}
@@ -190,7 +190,7 @@ func TestFilterToolsDisablesMultiple(t *testing.T) {
 // --- buildTools ---
 
 func TestBuildToolsAllPresent(t *testing.T) {
-	tools := buildTools([]string{"bastion"}, config.ToolsConfig{}, "")
+	tools := buildTools([]string{"bastion"}, config.ToolsConfig{}, "", nil)
 	names := make(map[string]bool)
 	for _, t2 := range tools {
 		if t2.OfTool != nil {
@@ -214,7 +214,7 @@ func TestBuildToolsAllPresent(t *testing.T) {
 }
 
 func TestBuildToolsDefaultCluster(t *testing.T) {
-	tools := buildTools(nil, config.ToolsConfig{}, "")
+	tools := buildTools(nil, config.ToolsConfig{}, "", nil)
 	if len(tools) == 0 {
 		t.Fatal("buildTools with nil clusters should still return tools")
 	}
@@ -222,7 +222,7 @@ func TestBuildToolsDefaultCluster(t *testing.T) {
 
 func TestBuildToolsWithDisabled(t *testing.T) {
 	cfg := config.ToolsConfig{Disabled: []string{"kubectl_delete", "ssh_exec"}}
-	tools := buildTools([]string{"bastion"}, cfg, "")
+	tools := buildTools([]string{"bastion"}, cfg, "", nil)
 	for _, t2 := range tools {
 		if t2.OfTool != nil {
 			if t2.OfTool.Name == "kubectl_delete" || t2.OfTool.Name == "ssh_exec" {
@@ -233,7 +233,7 @@ func TestBuildToolsWithDisabled(t *testing.T) {
 }
 
 func TestBuildToolsCount(t *testing.T) {
-	tools := buildTools([]string{"bastion"}, config.ToolsConfig{}, "")
+	tools := buildTools([]string{"bastion"}, config.ToolsConfig{}, "", nil)
 	if len(tools) < 20 {
 		t.Errorf("buildTools returned only %d tools, expected at least 20", len(tools))
 	}
@@ -242,7 +242,7 @@ func TestBuildToolsCount(t *testing.T) {
 // --- Frigate tool inclusion ---
 
 func TestBuildToolsNoFrigateURLExcludesFrigateTools(t *testing.T) {
-	tools := buildTools([]string{"bastion"}, config.ToolsConfig{}, "")
+	tools := buildTools([]string{"bastion"}, config.ToolsConfig{}, "", nil)
 	for _, t2 := range tools {
 		if t2.OfTool != nil {
 			switch t2.OfTool.Name {
@@ -254,7 +254,7 @@ func TestBuildToolsNoFrigateURLExcludesFrigateTools(t *testing.T) {
 }
 
 func TestBuildToolsWithFrigateURLIncludesFrigateTools(t *testing.T) {
-	tools := buildTools([]string{"bastion"}, config.ToolsConfig{}, "https://nvr.example.com")
+	tools := buildTools([]string{"bastion"}, config.ToolsConfig{}, "https://nvr.example.com", nil)
 	names := make(map[string]bool)
 	for _, t2 := range tools {
 		if t2.OfTool != nil {
@@ -269,8 +269,8 @@ func TestBuildToolsWithFrigateURLIncludesFrigateTools(t *testing.T) {
 }
 
 func TestBuildToolsFrigateCountDifference(t *testing.T) {
-	without := buildTools([]string{"bastion"}, config.ToolsConfig{}, "")
-	with := buildTools([]string{"bastion"}, config.ToolsConfig{}, "https://nvr.example.com")
+	without := buildTools([]string{"bastion"}, config.ToolsConfig{}, "", nil)
+	with := buildTools([]string{"bastion"}, config.ToolsConfig{}, "https://nvr.example.com", nil)
 	if len(with) != len(without)+3 {
 		t.Errorf("expected 3 extra tools with Frigate, got %d extra", len(with)-len(without))
 	}
@@ -278,7 +278,7 @@ func TestBuildToolsFrigateCountDifference(t *testing.T) {
 
 func TestBuildToolsFrigateCanBeDisabled(t *testing.T) {
 	cfg := config.ToolsConfig{Disabled: []string{"frigate_snapshot"}}
-	tools := buildTools([]string{"bastion"}, cfg, "https://nvr.example.com")
+	tools := buildTools([]string{"bastion"}, cfg, "https://nvr.example.com", nil)
 	for _, t2 := range tools {
 		if t2.OfTool != nil && t2.OfTool.Name == "frigate_snapshot" {
 			t.Error("frigate_snapshot should be disabled")

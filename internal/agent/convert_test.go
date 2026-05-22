@@ -10,7 +10,7 @@ import (
 )
 
 func TestConvertToolsToBetaPreservesAll(t *testing.T) {
-	tools := buildTools([]string{"bastion"}, config.ToolsConfig{}, "https://nvr-int.jimytar.com")
+	tools := buildTools([]string{"bastion"}, config.ToolsConfig{}, "https://nvr-int.jimytar.com", nil)
 	beta := convertToolsToBeta(tools)
 
 	if len(beta) != len(tools) {
@@ -33,7 +33,7 @@ func TestConvertToolsToBetaPreservesAll(t *testing.T) {
 }
 
 func TestConvertToolsToBetaRoundTrip(t *testing.T) {
-	tools := buildTools([]string{"bastion"}, config.ToolsConfig{}, "https://nvr-int.jimytar.com")
+	tools := buildTools([]string{"bastion"}, config.ToolsConfig{}, "https://nvr-int.jimytar.com", nil)
 
 	for _, tool := range tools {
 		if tool.OfTool == nil {

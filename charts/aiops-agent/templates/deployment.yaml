@@ -105,6 +105,15 @@ spec:
                   name: {{ .tokenSecretName }}
                   key: {{ .tokenSecretKey }}
             {{- end }}
+            {{- range .Values.agent.httpIntegrations }}
+            {{- if and .apiKeyEnv .apiKeySecretName .apiKeySecretKey }}
+            - name: {{ .apiKeyEnv }}
+              valueFrom:
+                secretKeyRef:
+                  name: {{ .apiKeySecretName }}
+                  key: {{ .apiKeySecretKey }}
+            {{- end }}
+            {{- end }}
           ports:
             - name: webhook
               containerPort: {{ .Values.agent.webhookPort }}

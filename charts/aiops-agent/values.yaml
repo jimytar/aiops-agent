@@ -94,6 +94,108 @@ agent:
   # Frigate NVR base URL. Leave empty to disable camera tools.
   frigateURL: ""
 
+  # Generic REST API integrations. Each entry generates one tool per endpoint
+  # named "<name>_<endpointName>" (e.g. sonarr_calendar, radarr_movie_add).
+  # GET endpoints are readonly (no confirmation). POST/PUT are mutating (require
+  # confirmation). DELETE is destructive. Override per-endpoint with tier:.
+  # API keys are read from environment variables injected via apiKeySecretName.
+  httpIntegrations: []
+  #   - name: sonarr
+  #     baseURL: https://sonarr.home.local
+  #     apiKeyEnv: SONARR_API_KEY
+  #     apiKeyHeader: X-Api-Key          # default, can omit
+  #     apiKeySecretName: aiops-sonarr-key
+  #     apiKeySecretKey: api-key
+  #     # Defaults merged into every POST/PUT body automatically.
+  #     defaults:
+  #       qualityProfileId: 1
+  #       rootFolderPath: /tv
+  #       monitored: true
+  #       seasonFolder: true
+  #       addOptions:
+  #         searchForMissingEpisodes: true
+  #     endpoints:
+  #       - name: series
+  #         path: /api/v3/series
+  #         description: List all monitored TV shows in Sonarr.
+  #       - name: series_lookup
+  #         path: /api/v3/series/lookup
+  #         description: Search for a TV show by name. Pass {\"term\": \"show name\"} as query_params. Returns TVDB ID and metadata needed to add the show.
+  #       - name: series_add
+  #         path: /api/v3/series
+  #         method: POST
+  #         description: Add a TV show to Sonarr. Requires tvdbId, title, and titleSlug from series_lookup. Defaults (qualityProfileId, rootFolderPath, monitored) are applied automatically.
+  #       - name: calendar
+  #         path: /api/v3/calendar
+  #         description: Upcoming episodes releasing in the next 7 days.
+  #       - name: queue
+  #         path: /api/v3/queue
+  #         description: Current download queue (in-progress downloads).
+  #       - name: command
+  #         path: /api/v3/command
+  #         method: POST
+  #         description: Trigger a Sonarr command. E.g. {\"name\": \"SeriesSearch\", \"seriesId\": 123} or {\"name\": \"RefreshSeries\"}.
+  #
+  #   - name: radarr
+  #     baseURL: https://radarr.home.local
+  #     apiKeyEnv: RADARR_API_KEY
+  #     apiKeySecretName: aiops-radarr-key
+  #     apiKeySecretKey: api-key
+  #     defaults:
+  #       qualityProfileId: 1
+  #       rootFolderPath: /movies
+  #       monitored: true
+  #       addOptions:
+  #         searchForMovie: true
+  #     endpoints:
+  #       - name: movies
+  #         path: /api/v3/movie
+  #         description: List all movies in Radarr.
+  #       - name: movie_lookup
+  #         path: /api/v3/movie/lookup
+  #         description: Search for a movie by name. Pass {\"term\": \"movie name\"} as query_params. Returns TMDB ID and metadata needed to add the movie.
+  #       - name: movie_add
+  #         path: /api/v3/movie
+  #         method: POST
+  #         description: Add a movie to Radarr. Requires tmdbId and title from movie_lookup. Defaults (qualityProfileId, rootFolderPath, monitored) are applied automatically.
+  #       - name: queue
+  #         path: /api/v3/queue
+  #         description: Current download queue.
+  #       - name: command
+  #         path: /api/v3/command
+  #         method: POST
+  #         description: Trigger a Radarr command. E.g. {\"name\": \"MoviesSearch\", \"movieIds\": [123]}.
+  #
+  #   - name: jellyfin
+  #     baseURL: https://jellyfin.home.local
+  #     apiKeyEnv: JELLYFIN_API_KEY
+  #     apiKeyHeader: X-Emby-Token
+  #     apiKeySecretName: aiops-jellyfin-key
+  #     apiKeySecretKey: api-key
+  #     endpoints:
+  #       - name: sessions
+  #         path: /Sessions
+  #         description: List active Jellyfin playback sessions (who is watching what).
+  #       - name: items
+  #         path: /Items?IncludeItemTypes=Movie,Series&Recursive=true&Fields=Name,ProductionYear,OfficialRating
+  #         description: Browse the Jellyfin media library (movies and series).
+  #       - name: activity
+  #         path: /System/ActivityLog/Entries?limit=20
+  #         description: Recent Jellyfin activity log entries.
+  #
+  #   - name: prowlarr
+  #     baseURL: https://prowlarr.home.local
+  #     apiKeyEnv: PROWLARR_API_KEY
+  #     apiKeySecretName: aiops-prowlarr-key
+  #     apiKeySecretKey: api-key
+  #     endpoints:
+  #       - name: indexers
+  #         path: /api/v1/indexer
+  #         description: List all configured Prowlarr indexers and their status.
+  #       - name: search
+  #         path: /api/v1/search
+  #         description: Search across all indexers. Pass {\"query\": \"term\", \"type\": \"search\"} as query_params.
+
   # MCP servers Claude connects to via the Beta API.
   # tokenSecretName/tokenSecretKey point to a pre-existing SOPS-encrypted secret;
   # the value is injected as an env var named by tokenEnv.

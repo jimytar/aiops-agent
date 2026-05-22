@@ -55,6 +55,12 @@ func run() error {
 		log.Printf("frigate integration enabled: %s", cfg.FrigateURL)
 	}
 
+	var httpExec *executor.HTTPIntegrationExecutor
+	if len(cfg.HTTPIntegrations) > 0 {
+		httpExec = executor.NewHTTPIntegrationExecutor(cfg.HTTPIntegrations)
+		log.Printf("http integrations enabled: %v", httpExec.Integrations())
+	}
+
 	execs := &agent.Executors{
 		Kubectl: executor.NewKubectlExecutor(k8sClients, cfg.KubectlExecAllowedCommands),
 		SSH:     sshExec,
@@ -63,6 +69,7 @@ func run() error {
 		Flux:    executor.NewFluxExecutor(k8sClients),
 		File:    executor.NewFileExecutor(cfg.GitRepoDirs),
 		Frigate: frigateExec,
+		HTTP:    httpExec,
 	}
 
 	// Agent.

@@ -59,6 +59,40 @@ type Config struct {
 	// prompt at startup. Mount a ConfigMap here to give Claude domain-specific
 	// operational knowledge without rebuilding the image.
 	RunbookDir string `yaml:"runbookDir"`
+
+	// HTTPIntegrations defines generic REST API integrations (Sonarr, Radarr,
+	// Jellyfin, etc.) that are exposed as tools without writing Go code.
+	HTTPIntegrations []HTTPIntegrationConfig `yaml:"httpIntegrations"`
+}
+
+// HTTPIntegrationConfig describes a single REST API service.
+type HTTPIntegrationConfig struct {
+	// Name is used as the tool name prefix, e.g. "sonarr" → "sonarr_series".
+	Name string `yaml:"name"`
+	// BaseURL is the root URL of the API, e.g. "https://sonarr.home.local".
+	BaseURL string `yaml:"baseURL"`
+	// APIKeyEnv is the environment variable holding the API key.
+	APIKeyEnv string `yaml:"apiKeyEnv"`
+	// APIKeyHeader is the HTTP header to send the key in (default: X-Api-Key).
+	APIKeyHeader string `yaml:"apiKeyHeader"`
+	// Defaults are merged into every POST/PUT request body automatically.
+	Defaults map[string]interface{} `yaml:"defaults"`
+	// Endpoints lists the individual operations exposed as tools.
+	Endpoints []HTTPEndpointConfig `yaml:"endpoints"`
+}
+
+// HTTPEndpointConfig describes a single API endpoint exposed as a tool.
+type HTTPEndpointConfig struct {
+	// Name is appended to the integration name: "sonarr" + "calendar" → "sonarr_calendar".
+	Name string `yaml:"name"`
+	// Path is the URL path, e.g. "/api/v3/series". May include static query params.
+	Path string `yaml:"path"`
+	// Method is GET, POST, PUT, or DELETE (default: GET).
+	Method string `yaml:"method"`
+	// Description is shown to Claude as the tool description.
+	Description string `yaml:"description"`
+	// Tier overrides the default tier (GET→readonly, POST/PUT/DELETE→mutating).
+	Tier string `yaml:"tier"`
 }
 
 // ToolsConfig controls the agent's built-in tool set.

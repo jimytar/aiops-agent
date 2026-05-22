@@ -102,7 +102,7 @@ func TestBuildMCPServersMultiple(t *testing.T) {
 // does NOT add mcp_toolset entries (those are added in New() from mcpServers).
 // This guards against accidentally double-adding them.
 func TestBetaToolsMCPToolsetEntries(t *testing.T) {
-	tools := buildTools([]string{"test-cluster"}, config.ToolsConfig{}, "")
+	tools := buildTools([]string{"test-cluster"}, config.ToolsConfig{}, "", nil)
 	beta := convertToolsToBeta(tools)
 	for i, bt := range beta {
 		if bt.OfMCPToolset != nil {
