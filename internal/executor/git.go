@@ -106,6 +106,27 @@ func (e *GitExecutor) Commit(repoDir, message string) (string, error) {
 	return e.run(repoDir, "git", "commit", "-m", message)
 }
 
+// Tag creates an annotated git tag and pushes it to origin.
+// This triggers CI release pipelines that depend on tag pushes.
+func (e *GitExecutor) Tag(repoDir, tag, message string) (string, error) {
+	if repoDir == "" && len(e.repoDirs) > 0 {
+		repoDir = e.repoDirs[0]
+	}
+	if repoDir == "" {
+		return "", fmt.Errorf("no git repositories configured")
+	}
+	if tag == "" {
+		return "", fmt.Errorf("tag name is required")
+	}
+	if message == "" {
+		message = tag
+	}
+	if _, err := e.run(repoDir, "git", "tag", "-a", tag, "-m", message); err != nil {
+		return "", err
+	}
+	return e.run(repoDir, "git", "push", "origin", tag)
+}
+
 func (e *GitExecutor) RepoDirs() []string {
 	return e.repoDirs
 }

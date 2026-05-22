@@ -80,7 +80,7 @@ agent:
     # Valid names: kubectl_get, kubectl_describe, kubectl_logs, kubectl_get_events,
     #   kubectl_restart, kubectl_scale, kubectl_rollout, kubectl_delete,
     #   helm_list, helm_status, helm_rollback,
-    #   git_status, git_log, git_pull,
+    #   git_status, git_log, git_pull, git_push, git_commit, git_tag,
     #   ssh_exec_readonly, ssh_exec
     disabled: []
     #   - kubectl_delete

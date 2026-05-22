@@ -542,6 +542,8 @@ func (a *Agent) dispatchTool(ctx context.Context, name string, input json.RawMes
 		return txt(a.executors.Git.Diff(str("repo_dir")))
 	case "git_commit":
 		return txt(a.executors.Git.Commit(str("repo_dir"), str("message")))
+	case "git_tag":
+		return txt(a.executors.Git.Tag(str("repo_dir"), str("tag"), str("message")))
 	case "frigate_cameras":
 		if a.executors.Frigate == nil {
 			return txt("Frigate is not configured.", nil)
