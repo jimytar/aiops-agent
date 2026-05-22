@@ -4,6 +4,7 @@ import (
 	"context"
 	"strings"
 	"testing"
+	"time"
 
 	appsv1 "k8s.io/api/apps/v1"
 	corev1 "k8s.io/api/core/v1"
@@ -377,5 +378,145 @@ func TestKubectlExecAllowlistAccepts(t *testing.T) {
 	// Error is expected (no real pod/cluster), but NOT an allowlist error.
 	if err != nil && strings.Contains(err.Error(), "allowlist") {
 		t.Errorf("'env' should pass allowlist check, got: %v", err)
+	}
+}
+
+// ── age helper ────────────────────────────────────────────────────────────────
+
+func TestAge(t *testing.T) {
+	now := time.Now()
+	cases := []struct {
+		d    time.Duration
+		want string // suffix character
+	}{
+		{10 * time.Second, "s"},
+		{90 * time.Second, "m"},
+		{3 * time.Hour, "h"},
+		{48 * time.Hour, "d"},
+	}
+	for _, c := range cases {
+		got := age(now.Add(-c.d))
+		if !strings.HasSuffix(got, c.want) {
+			t.Errorf("age(-%v) = %q, want suffix %q", c.d, got, c.want)
+		}
+	}
+}
+
+// ── podReadyCount ─────────────────────────────────────────────────────────────
+
+func TestPodReadyCount(t *testing.T) {
+	pod := corev1.Pod{
+		Status: corev1.PodStatus{
+			ContainerStatuses: []corev1.ContainerStatus{
+				{Name: "app", Ready: true},
+				{Name: "sidecar", Ready: false},
+				{Name: "proxy", Ready: true},
+			},
+		},
+	}
+	if got := podReadyCount(pod); got != 2 {
+		t.Errorf("podReadyCount = %d, want 2", got)
+	}
+}
+
+func TestPodReadyCountEmpty(t *testing.T) {
+	if got := podReadyCount(corev1.Pod{}); got != 0 {
+		t.Errorf("podReadyCount(empty) = %d, want 0", got)
+	}
+}
+
+// ── podRestarts ───────────────────────────────────────────────────────────────
+
+func TestPodRestarts(t *testing.T) {
+	pod := corev1.Pod{
+		Status: corev1.PodStatus{
+			ContainerStatuses: []corev1.ContainerStatus{
+				{Name: "app", RestartCount: 3},
+				{Name: "sidecar", RestartCount: 1},
+			},
+		},
+	}
+	if got := podRestarts(pod); got != 4 {
+		t.Errorf("podRestarts = %d, want 4", got)
+	}
+}
+
+func TestPodRestartsEmpty(t *testing.T) {
+	if got := podRestarts(corev1.Pod{}); got != 0 {
+		t.Errorf("podRestarts(empty) = %d, want 0", got)
+	}
+}
+
+// ── describePod ───────────────────────────────────────────────────────────────
+
+func TestDescribePodContainerStatuses(t *testing.T) {
+	pod := &corev1.Pod{
+		ObjectMeta: metav1.ObjectMeta{Name: "web", Namespace: "default"},
+		Spec: corev1.PodSpec{
+			NodeName:   "node-1",
+			Containers: []corev1.Container{{Name: "app", Image: "nginx:latest"}},
+		},
+		Status: corev1.PodStatus{
+			Phase: corev1.PodRunning,
+			ContainerStatuses: []corev1.ContainerStatus{
+				{Name: "app", Ready: true, RestartCount: 2},
+			},
+		},
+	}
+	out := describePod(pod)
+
+	for _, want := range []string{"web", "default", "node-1", "app", "nginx:latest", "ready=true", "restarts=2"} {
+		if !strings.Contains(out, want) {
+			t.Errorf("describePod missing %q, got:\n%s", want, out)
+		}
+	}
+}
+
+func TestDescribePodWaitingContainer(t *testing.T) {
+	pod := &corev1.Pod{
+		ObjectMeta: metav1.ObjectMeta{Name: "crash", Namespace: "default"},
+		Status: corev1.PodStatus{
+			ContainerStatuses: []corev1.ContainerStatus{
+				{
+					Name: "app",
+					State: corev1.ContainerState{
+						Waiting: &corev1.ContainerStateWaiting{
+							Reason:  "CrashLoopBackOff",
+							Message: "back-off 5m0s restarting failed container",
+						},
+					},
+				},
+			},
+		},
+	}
+	out := describePod(pod)
+	if !strings.Contains(out, "CrashLoopBackOff") {
+		t.Errorf("describePod should show Waiting reason, got:\n%s", out)
+	}
+}
+
+func TestDescribePodTerminatedContainer(t *testing.T) {
+	pod := &corev1.Pod{
+		ObjectMeta: metav1.ObjectMeta{Name: "job", Namespace: "default"},
+		Status: corev1.PodStatus{
+			ContainerStatuses: []corev1.ContainerStatus{
+				{
+					Name: "worker",
+					State: corev1.ContainerState{
+						Terminated: &corev1.ContainerStateTerminated{
+							Reason:   "OOMKilled",
+							ExitCode: 137,
+						},
+					},
+				},
+			},
+		},
+	}
+	out := describePod(pod)
+	if !strings.Contains(out, "OOMKilled") {
+		t.Errorf("describePod should show Terminated reason, got:\n%s", out)
+	}
+	if !strings.Contains(out, "137") {
+		t.Errorf("describePod should show exit code 137, got:\n%s", out)
 	}
 }

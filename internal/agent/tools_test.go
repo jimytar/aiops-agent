@@ -297,3 +297,228 @@ func TestTierForExported(t *testing.T) {
 		t.Errorf("TierFor(kubectl_get) = %v", got)
 	}
 }
+
+// --- httpEndpointDefaultTier ---
+
+func TestHTTPEndpointDefaultTierGET(t *testing.T) {
+	cases := []struct {
+		method string
+		want   toolTier
+	}{
+		{"GET", tierReadonly},
+		{"get", tierReadonly},
+		{"", tierReadonly}, // empty method defaults to GET
+		{"POST", tierMutating},
+		{"PUT", tierMutating},
+		{"PATCH", tierMutating},
+		{"DELETE", tierDestructive},
+		{"delete", tierDestructive},
+	}
+	for _, c := range cases {
+		got := httpEndpointDefaultTier(c.method)
+		if got != c.want {
+			t.Errorf("httpEndpointDefaultTier(%q) = %v, want %v", c.method, got, c.want)
+		}
+	}
+}
+
+// --- buildHTTPTools ---
+
+func TestBuildHTTPToolsEmpty(t *testing.T) {
+	tools := buildHTTPTools(nil)
+	if len(tools) != 0 {
+		t.Errorf("expected 0 tools, got %d", len(tools))
+	}
+}
+
+func TestBuildHTTPToolsGETHasQueryParams(t *testing.T) {
+	integrations := []config.HTTPIntegrationConfig{
+		{
+			Name:    "sonarr",
+			BaseURL: "https://sonarr.local",
+			Endpoints: []config.HTTPEndpointConfig{
+				{Name: "series", Path: "/api/v3/series", Method: "GET", Description: "List series"},
+			},
+		},
+	}
+	tools := buildHTTPTools(integrations)
+	if len(tools) != 1 {
+		t.Fatalf("expected 1 tool, got %d", len(tools))
+	}
+	tool := tools[0].OfTool
+	if tool == nil {
+		t.Fatal("OfTool is nil")
+	}
+	if tool.Name != "sonarr_series" {
+		t.Errorf("tool name = %q, want sonarr_series", tool.Name)
+	}
+	props, _ := tool.InputSchema.Properties.(map[string]interface{})
+	if _, ok := props["query_params"]; !ok {
+		t.Error("GET endpoint should have query_params property")
+	}
+	if _, ok := props["body"]; ok {
+		t.Error("GET endpoint should not have body property")
+	}
+}
+
+func TestBuildHTTPToolsPOSTHasBody(t *testing.T) {
+	integrations := []config.HTTPIntegrationConfig{
+		{
+			Name:    "sonarr",
+			BaseURL: "https://sonarr.local",
+			Defaults: map[string]interface{}{
+				"qualityProfileId": 1,
+			},
+			Endpoints: []config.HTTPEndpointConfig{
+				{Name: "series_add", Path: "/api/v3/series", Method: "POST", Description: "Add series"},
+			},
+		},
+	}
+	tools := buildHTTPTools(integrations)
+	if len(tools) != 1 {
+		t.Fatalf("expected 1 tool, got %d", len(tools))
+	}
+	tool := tools[0].OfTool
+	props, _ := tool.InputSchema.Properties.(map[string]interface{})
+	if _, ok := props["body"]; !ok {
+		t.Error("POST endpoint should have body property")
+	}
+	if _, ok := props["query_params"]; ok {
+		t.Error("POST endpoint should not have query_params property")
+	}
+	// With defaults, body description should mention defaults.
+	bodyProp, _ := props["body"].(map[string]interface{})
+	desc, _ := bodyProp["description"].(string)
+	if desc == "" {
+		t.Error("body property should have a description")
+	}
+}
+
+func TestBuildHTTPToolsMultipleIntegrations(t *testing.T) {
+	integrations := []config.HTTPIntegrationConfig{
+		{
+			Name:    "sonarr",
+			BaseURL: "https://sonarr.local",
+			Endpoints: []config.HTTPEndpointConfig{
+				{Name: "series", Path: "/api/v3/series", Description: "List"},
+				{Name: "calendar", Path: "/api/v3/calendar", Description: "Calendar"},
+			},
+		},
+		{
+			Name:    "radarr",
+			BaseURL: "https://radarr.local",
+			Endpoints: []config.HTTPEndpointConfig{
+				{Name: "movies", Path: "/api/v3/movie", Description: "Movies"},
+			},
+		},
+	}
+	tools := buildHTTPTools(integrations)
+	if len(tools) != 3 {
+		t.Fatalf("expected 3 tools, got %d", len(tools))
+	}
+	names := map[string]bool{}
+	for _, t2 := range tools {
+		if t2.OfTool != nil {
+			names[t2.OfTool.Name] = true
+		}
+	}
+	for _, want := range []string{"sonarr_series", "sonarr_calendar", "radarr_movies"} {
+		if !names[want] {
+			t.Errorf("missing tool %q", want)
+		}
+	}
+}
+
+func TestBuildHTTPToolsDeleteHasQueryParams(t *testing.T) {
+	integrations := []config.HTTPIntegrationConfig{
+		{
+			Name:    "sonarr",
+			BaseURL: "https://sonarr.local",
+			Endpoints: []config.HTTPEndpointConfig{
+				{Name: "series_delete", Path: "/api/v3/series/1", Method: "DELETE", Description: "Delete"},
+			},
+		},
+	}
+	tools := buildHTTPTools(integrations)
+	if len(tools) != 1 {
+		t.Fatalf("expected 1 tool, got %d", len(tools))
+	}
+	props, _ := tools[0].OfTool.InputSchema.Properties.(map[string]interface{})
+	if _, ok := props["query_params"]; !ok {
+		t.Error("DELETE endpoint should have query_params property")
+	}
+}
+
+// --- applyToolsConfig with HTTP integrations ---
+
+func TestApplyToolsConfigHTTPIntegrationTiers(t *testing.T) {
+	defer func() { effectiveTiers = defaultTiers }()
+
+	integrations := []config.HTTPIntegrationConfig{
+		{
+			Name:    "sonarr",
+			BaseURL: "https://sonarr.local",
+			Endpoints: []config.HTTPEndpointConfig{
+				{Name: "series", Method: "GET"},
+				{Name: "series_add", Method: "POST"},
+				{Name: "series_del", Method: "DELETE"},
+				{Name: "series_update", Method: "PUT"},
+			},
+		},
+	}
+	applyToolsConfig(config.ToolsConfig{}, integrations)
+
+	if got := toolTierFor("sonarr_series"); got != tierReadonly {
+		t.Errorf("sonarr_series (GET) = %v, want tierReadonly", got)
+	}
+	if got := toolTierFor("sonarr_series_add"); got != tierMutating {
+		t.Errorf("sonarr_series_add (POST) = %v, want tierMutating", got)
+	}
+	if got := toolTierFor("sonarr_series_del"); got != tierDestructive {
+		t.Errorf("sonarr_series_del (DELETE) = %v, want tierDestructive", got)
+	}
+	if got := toolTierFor("sonarr_series_update"); got != tierMutating {
+		t.Errorf("sonarr_series_update (PUT) = %v, want tierMutating", got)
+	}
+}
+
+func TestApplyToolsConfigHTTPTierOverride(t *testing.T) {
+	defer func() { effectiveTiers = defaultTiers }()
+
+	integrations := []config.HTTPIntegrationConfig{
+		{
+			Name:    "sonarr",
+			BaseURL: "https://sonarr.local",
+			Endpoints: []config.HTTPEndpointConfig{
+				{Name: "command", Method: "POST", Tier: "readonly"},
+			},
+		},
+	}
+	applyToolsConfig(config.ToolsConfig{}, integrations)
+
+	if got := toolTierFor("sonarr_command"); got != tierReadonly {
+		t.Errorf("sonarr_command with tier override = %v, want tierReadonly", got)
+	}
+}
+
+func TestBuildToolsIncludesHTTPTools(t *testing.T) {
+	integrations := []config.HTTPIntegrationConfig{
+		{
+			Name:    "sonarr",
+			BaseURL: "https://sonarr.local",
+			Endpoints: []config.HTTPEndpointConfig{
+				{Name: "series", Description: "List series"},
+			},
+		},
+	}
+	tools := buildTools([]string{"bastion"}, config.ToolsConfig{}, "", integrations)
+	names := map[string]bool{}
+	for _, t2 := range tools {
+		if t2.OfTool != nil {
+			names[t2.OfTool.Name] = true
+		}
+	}
+	if !names["sonarr_series"] {
+		t.Error("buildTools should include HTTP integration tool sonarr_series")
+	}
+}

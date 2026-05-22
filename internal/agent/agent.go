@@ -28,10 +28,15 @@ func TierFor(name string) toolTier { return toolTierFor(name) }
 
 // PendingTool holds a mutating tool call Claude requested but not yet executed.
 type PendingTool struct {
-	ID    string
-	Name  string
-	Input json.RawMessage
-	Tier  toolTier
+	ID             string
+	Name           string
+	Input          json.RawMessage
+	Tier           toolTier
+	// PartialResults holds serialized tool_result blocks for readonly tools that
+	// were auto-executed in the same response turn as this pending tool. They must
+	// be included in the combined user message when this tool is finally executed,
+	// so every tool_use in the assistant message has a matching tool_result.
+	PartialResults []json.RawMessage
 }
 
 // Executors bundles all operation executors.
@@ -181,8 +186,23 @@ func (a *Agent) ExecuteTool(
 	duration := time.Since(start).Milliseconds()
 	audit(chatID, username, pending.Name, pending.Input, true, nonce, duration, execErr)
 
-	userMsg := anthropic.NewUserMessage(buildToolResultBlocks(pending.ID, out, execErr, a.cfg.MaxToolOutputBytes)...)
-	raw, _ := json.Marshal(userMsg)
+	// Build a single user message that contains ALL tool_result blocks for this
+	// response turn: the readonly tools already executed (PartialResults) plus the
+	// result for the pending mutating tool. This ensures every tool_use block in
+	// the preceding assistant message has exactly one matching tool_result.
+	pendingBlocks := buildToolResultBlocks(pending.ID, out, execErr, a.cfg.MaxToolOutputBytes)
+	var allContent []json.RawMessage
+	allContent = append(allContent, pending.PartialResults...)
+	for _, b := range pendingBlocks {
+		if enc, err := json.Marshal(b); err == nil {
+			allContent = append(allContent, enc)
+		}
+	}
+	type rawMsg struct {
+		Role    string            `json:"role"`
+		Content []json.RawMessage `json:"content"`
+	}
+	raw, _ := json.Marshal(rawMsg{Role: "user", Content: allContent})
 	msgs := append(messages, raw)
 	return a.RunTurn(ctx, msgs, chatID, username, statusUpdate)
 }
@@ -294,6 +314,11 @@ func (a *Agent) runTurnStd(
 		}
 
 		if pendingTool != nil {
+			for _, r := range toolResults {
+				if b, err := json.Marshal(r); err == nil {
+					pendingTool.PartialResults = append(pendingTool.PartialResults, b)
+				}
+			}
 			return &TurnResult{AssistantText: extractTextStd(resp.Content), Messages: stdToRaw(msgs), PendingTool: pendingTool}, nil
 		}
 		if len(toolResults) > 0 {
@@ -367,6 +392,11 @@ func (a *Agent) runTurnBeta(
 		}
 
 		if pendingTool != nil {
+			for _, r := range toolResults {
+				if b, err := json.Marshal(r); err == nil {
+					pendingTool.PartialResults = append(pendingTool.PartialResults, b)
+				}
+			}
 			return &TurnResult{
 				AssistantText: extractTextBeta(resp.Content),
 				Messages:      betaToRaw(betaMsgs),
