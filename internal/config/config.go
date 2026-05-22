@@ -34,9 +34,10 @@ type Config struct {
 	SSHAllowedMutating     []string          `yaml:"sshAllowedMutating"`
 
 	// Agent behavior
-	MaxToolOutputBytes        int    `yaml:"maxToolOutputBytes"`
-	ConfirmationTimeoutSeconds int   `yaml:"confirmationTimeoutSeconds"`
-	SystemPrompt              string `yaml:"systemPrompt"`
+	MaxToolOutputBytes         int    `yaml:"maxToolOutputBytes"`
+	ConfirmationTimeoutSeconds int    `yaml:"confirmationTimeoutSeconds"`
+	ExecTimeoutSeconds         int    `yaml:"execTimeoutSeconds"`
+	SystemPrompt               string `yaml:"systemPrompt"`
 
 	// Git
 	GitRepoDirs []string `yaml:"gitRepoDirs"`
@@ -161,6 +162,7 @@ func defaults() *Config {
 		SSHKeyDir:                  "/etc/aiops/ssh",
 		MaxToolOutputBytes:         8192,
 		ConfirmationTimeoutSeconds: 300,
+		ExecTimeoutSeconds:         120,
 		SSHAllowedReadonly: []string{
 			"systemctl status",
 			"journalctl",

@@ -69,6 +69,10 @@ func (h *Handler) handleMessage(ctx context.Context, msg *tgbotapi.Message) {
 		return
 	}
 
+	sess := h.sessions.get(chatID)
+	sess.mu.Lock()
+	defer sess.mu.Unlock()
+
 	text := strings.TrimSpace(msg.Text)
 	if text == "" {
 		return
@@ -121,7 +125,6 @@ func (h *Handler) handleMessage(ctx context.Context, msg *tgbotapi.Message) {
 	}
 
 	// Regular conversation turn.
-	sess := h.sessions.get(chatID)
 	userMsg := anthropic.NewUserMessage(anthropic.NewTextBlock(text))
 	raw, _ := json.Marshal(userMsg)
 	sess.append(raw)

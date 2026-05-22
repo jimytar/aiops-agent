@@ -14,6 +14,7 @@ type sessionStore struct {
 }
 
 type session struct {
+	mu       sync.Mutex
 	messages []json.RawMessage
 }
 

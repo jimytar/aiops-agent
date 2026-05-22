@@ -1,9 +1,9 @@
 package bot
 
 import (
+	"crypto/rand"
 	"encoding/json"
 	"fmt"
-	"math/rand"
 	"strings"
 	"sync"
 	"time"
@@ -57,8 +57,11 @@ func (s *confirmStore) clear(chatID int64) {
 func newNonce() string {
 	const chars = "ABCDEFGHJKLMNPQRSTUVWXYZ23456789"
 	b := make([]byte, 6)
-	for i := range b {
-		b[i] = chars[rand.Intn(len(chars))]
+	if _, err := rand.Read(b); err != nil {
+		panic(fmt.Sprintf("newNonce: %v", err))
+	}
+	for i, v := range b {
+		b[i] = chars[int(v)%len(chars)]
 	}
 	return string(b)
 }
@@ -72,7 +75,9 @@ func confirmPrompt(c *pendingConfirmation) string {
 
 func toolSummary(pt *agent.PendingTool) string {
 	var args map[string]interface{}
-	_ = json.Unmarshal(pt.Input, &args)
+	if err := json.Unmarshal(pt.Input, &args); err != nil {
+		return pt.Name
+	}
 
 	parts := []string{pt.Name}
 	for _, key := range []string{"deployment", "release", "pod", "resource", "name", "host", "command"} {

@@ -2,7 +2,7 @@ replicaCount: 1
 
 image:
   repository: ghcr.io/jimytar/aiops-agent
-  tag: "main"
+  tag: ""  # defaults to .Chart.AppVersion; override for canary/dev deploys
   pullPolicy: IfNotPresent
 
 serviceAccount:

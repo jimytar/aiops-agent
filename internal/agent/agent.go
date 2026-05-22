@@ -17,6 +17,8 @@ import (
 	"github.com/anthropics/anthropic-sdk-go/option"
 	"github.com/jimytar/aiops-agent/internal/config"
 	"github.com/jimytar/aiops-agent/internal/executor"
+	"golang.org/x/text/cases"
+	"golang.org/x/text/language"
 	"golang.org/x/time/rate"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 )
@@ -69,16 +71,17 @@ func New(cfg *config.Config, execs *Executors, clusterNames []string) *Agent {
 	// 1 request/second sustained, burst of 3 — stays well within Anthropic limits.
 	limiter := rate.NewLimiter(rate.Every(time.Second), 3)
 
-	// For OAuth tokens (sk-ant-oat*), use Bearer auth.
-	// The SDK always reads ANTHROPIC_API_KEY from env and sets it as x-api-key,
-	// so unset it first to avoid sending both headers (Anthropic rejects the request
-	// when x-api-key contains an OAuth token, even if Bearer is also present).
-	var clientOpt option.RequestOption
+	// For OAuth tokens (sk-ant-oat*), use Bearer auth and explicitly supply an
+	// empty API key so the SDK does not fall back to reading ANTHROPIC_API_KEY
+	// from the environment and sending a conflicting x-api-key header.
+	var clientOpts []option.RequestOption
 	if strings.HasPrefix(cfg.AnthropicAPIKey, "sk-ant-oat") {
-		os.Unsetenv("ANTHROPIC_API_KEY")
-		clientOpt = option.WithAuthToken(cfg.AnthropicAPIKey)
+		clientOpts = []option.RequestOption{
+			option.WithAPIKey(""),
+			option.WithAuthToken(cfg.AnthropicAPIKey),
+		}
 	} else {
-		clientOpt = option.WithAPIKey(cfg.AnthropicAPIKey)
+		clientOpts = []option.RequestOption{option.WithAPIKey(cfg.AnthropicAPIKey)}
 	}
 
 	sysPrompt := cfg.SystemPrompt
@@ -87,7 +90,7 @@ func New(cfg *config.Config, execs *Executors, clusterNames []string) *Agent {
 	}
 
 	a := &Agent{
-		client:       anthropic.NewClient(clientOpt),
+		client:       anthropic.NewClient(clientOpts...),
 		cfg:          cfg,
 		executors:    execs,
 		tools:        buildTools(clusterNames, cfg.Tools, cfg.FrigateURL),
@@ -393,13 +396,15 @@ func (a *Agent) dispatchTool(ctx context.Context, name string, input json.RawMes
 	case "git_push":
 		return txt(a.executors.Git.Push(str("repo_dir")))
 	case "ssh_exec_readonly":
-		return txt(a.executors.SSH.ExecReadonly(str("host"), str("command")))
+		return txt(a.executors.SSH.ExecReadonly(ctx, str("host"), str("command")))
 	case "ssh_exec":
-		return txt(a.executors.SSH.Exec(str("host"), str("command")))
+		return txt(a.executors.SSH.Exec(ctx, str("host"), str("command")))
 	case "flux_reconcile":
 		return txt(a.executors.Flux.Reconcile(ctx, str("kind"), str("name"), str("namespace"), str("cluster")))
 	case "kubectl_exec":
-		return txt(a.executors.Kubectl.Exec(ctx, str("pod"), str("namespace"), str("container"), str("cluster"), str("command")))
+		execCtx, execCancel := context.WithTimeout(ctx, time.Duration(a.cfg.ExecTimeoutSeconds)*time.Second)
+		defer execCancel()
+		return txt(a.executors.Kubectl.Exec(execCtx, str("pod"), str("namespace"), str("container"), str("cluster"), str("command")))
 	case "list_files":
 		return txt(a.executors.File.ListFiles(str("dir"), int(intVal("max_depth", 3))))
 	case "read_file":
@@ -492,7 +497,7 @@ func transcriptFromRaw(msgs []json.RawMessage) string {
 			switch block.Type {
 			case "text":
 				if block.Text != "" {
-					fmt.Fprintf(&sb, "%s: %s\n\n", strings.Title(m.Role), block.Text) //nolint:staticcheck
+					fmt.Fprintf(&sb, "%s: %s\n\n", cases.Title(language.Und).String(m.Role), block.Text)
 				}
 			case "tool_use":
 				fmt.Fprintf(&sb, "[tool: %s]\n\n", block.Name)
@@ -626,41 +631,66 @@ func buildMCPServers(cfgs []config.MCPServerConfig) []anthropic.BetaRequestMCPSe
 
 // convertToolsToBeta converts ToolUnionParam → BetaToolUnionParam via JSON.
 func convertToolsToBeta(tools []anthropic.ToolUnionParam) []anthropic.BetaToolUnionParam {
-	data, _ := json.Marshal(tools)
+	data, err := json.Marshal(tools)
+	if err != nil {
+		panic(fmt.Sprintf("convertToolsToBeta marshal: %v", err))
+	}
 	var beta []anthropic.BetaToolUnionParam
-	json.Unmarshal(data, &beta) //nolint:errcheck
+	if err := json.Unmarshal(data, &beta); err != nil {
+		panic(fmt.Sprintf("convertToolsToBeta unmarshal: %v", err))
+	}
 	return beta
 }
 
 // rawToStd unmarshals raw JSON messages into []MessageParam.
 func rawToStd(msgs []json.RawMessage) []anthropic.MessageParam {
-	data, _ := json.Marshal(msgs)
+	data, err := json.Marshal(msgs)
+	if err != nil {
+		panic(fmt.Sprintf("rawToStd marshal: %v", err))
+	}
 	var std []anthropic.MessageParam
-	json.Unmarshal(data, &std) //nolint:errcheck
+	if err := json.Unmarshal(data, &std); err != nil {
+		panic(fmt.Sprintf("rawToStd unmarshal: %v", err))
+	}
 	return std
 }
 
 // stdToRaw marshals []MessageParam into raw JSON messages.
 func stdToRaw(msgs []anthropic.MessageParam) []json.RawMessage {
-	data, _ := json.Marshal(msgs)
+	data, err := json.Marshal(msgs)
+	if err != nil {
+		panic(fmt.Sprintf("stdToRaw marshal: %v", err))
+	}
 	var raw []json.RawMessage
-	json.Unmarshal(data, &raw) //nolint:errcheck
+	if err := json.Unmarshal(data, &raw); err != nil {
+		panic(fmt.Sprintf("stdToRaw unmarshal: %v", err))
+	}
 	return raw
 }
 
 // rawToBeta unmarshals raw JSON messages into []BetaMessageParam.
 func rawToBeta(msgs []json.RawMessage) []anthropic.BetaMessageParam {
-	data, _ := json.Marshal(msgs)
+	data, err := json.Marshal(msgs)
+	if err != nil {
+		panic(fmt.Sprintf("rawToBeta marshal: %v", err))
+	}
 	var beta []anthropic.BetaMessageParam
-	json.Unmarshal(data, &beta) //nolint:errcheck
+	if err := json.Unmarshal(data, &beta); err != nil {
+		panic(fmt.Sprintf("rawToBeta unmarshal: %v", err))
+	}
 	return beta
 }
 
 // betaToRaw marshals []BetaMessageParam into raw JSON messages.
 func betaToRaw(msgs []anthropic.BetaMessageParam) []json.RawMessage {
-	data, _ := json.Marshal(msgs)
+	data, err := json.Marshal(msgs)
+	if err != nil {
+		panic(fmt.Sprintf("betaToRaw marshal: %v", err))
+	}
 	var raw []json.RawMessage
-	json.Unmarshal(data, &raw) //nolint:errcheck
+	if err := json.Unmarshal(data, &raw); err != nil {
+		panic(fmt.Sprintf("betaToRaw unmarshal: %v", err))
+	}
 	return raw
 }
 

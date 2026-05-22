@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"io"
 	"net/http"
+	"net/url"
 	"strings"
 	"time"
 )
@@ -75,16 +76,16 @@ func (e *FrigateExecutor) Events(camera, label string, limit int) (string, error
 	if limit <= 0 {
 		limit = 10
 	}
-	url := fmt.Sprintf("%s/api/events?limit=%d", e.baseURL, limit)
+	u := fmt.Sprintf("%s/api/events?limit=%d", e.baseURL, limit)
 	if camera != "" {
-		url += "&camera=" + camera
+		u += "&camera=" + url.QueryEscape(camera)
 	}
 	if label != "" {
-		url += "&label=" + label
+		u += "&label=" + url.QueryEscape(label)
 	}
 
 	var events []frigateEvent
-	if err := e.getJSON(url, &events); err != nil {
+	if err := e.getJSON(u, &events); err != nil {
 		return "", err
 	}
 	if len(events) == 0 {

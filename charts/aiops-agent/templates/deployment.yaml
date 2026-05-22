@@ -26,7 +26,7 @@ spec:
       {{- if and .Values.gitRepos.enabled .Values.gitRepos.repos }}
       initContainers:
         - name: git-clone
-          image: alpine/git:latest
+          image: alpine/git:2.47.2
           securityContext:
             runAsUser: 65532
             runAsNonRoot: true
@@ -72,7 +72,7 @@ spec:
       {{- end }}
       containers:
         - name: aiops-agent
-          image: "{{ .Values.image.repository }}:{{ .Values.image.tag }}"
+          image: "{{ .Values.image.repository }}:{{ .Values.image.tag | default .Chart.AppVersion }}"
           imagePullPolicy: {{ .Values.image.pullPolicy }}
           env:
             - name: CONFIG_FILE

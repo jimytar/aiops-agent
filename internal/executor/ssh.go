@@ -2,7 +2,9 @@ package executor
 
 import (
 	"bytes"
+	"context"
 	"fmt"
+	"log"
 	"os"
 	"path/filepath"
 	"strings"
@@ -28,10 +30,12 @@ func NewSSHExecutor(cfg *config.Config) (*SSHExecutor, error) {
 		return nil, fmt.Errorf("read ssh key dir: %w", err)
 	}
 
+	keyFiles := 0
 	for _, entry := range entries {
 		if entry.IsDir() {
 			continue
 		}
+		keyFiles++
 		path := filepath.Join(cfg.SSHKeyDir, entry.Name())
 		data, err := os.ReadFile(path)
 		if err != nil {
@@ -39,9 +43,14 @@ func NewSSHExecutor(cfg *config.Config) (*SSHExecutor, error) {
 		}
 		signer, err := ssh.ParsePrivateKey(data)
 		if err != nil {
+			log.Printf("ssh: skipping %s: %v", entry.Name(), err)
 			continue
 		}
 		e.signers = append(e.signers, signer)
+	}
+
+	if keyFiles > 0 && len(e.signers) == 0 {
+		log.Printf("ssh: WARNING — %d key file(s) found in %s but none parsed successfully; SSH operations will fail", keyFiles, cfg.SSHKeyDir)
 	}
 
 	return e, nil
@@ -59,22 +68,22 @@ func (e *SSHExecutor) host(name string) (config.SSHHost, error) {
 	return h, nil
 }
 
-func (e *SSHExecutor) ExecReadonly(hostName, command string) (string, error) {
+func (e *SSHExecutor) ExecReadonly(ctx context.Context, hostName, command string) (string, error) {
 	if !e.isAllowed(command, e.cfg.SSHAllowedReadonly) {
 		return "", fmt.Errorf("command not in readonly allowlist: %q", command)
 	}
-	return e.exec(hostName, command)
+	return e.exec(ctx, hostName, command)
 }
 
-func (e *SSHExecutor) Exec(hostName, command string) (string, error) {
+func (e *SSHExecutor) Exec(ctx context.Context, hostName, command string) (string, error) {
 	allowed := append(e.cfg.SSHAllowedReadonly, e.cfg.SSHAllowedMutating...)
 	if !e.isAllowed(command, allowed) {
 		return "", fmt.Errorf("command not in allowlist: %q", command)
 	}
-	return e.exec(hostName, command)
+	return e.exec(ctx, hostName, command)
 }
 
-func (e *SSHExecutor) exec(hostName, command string) (string, error) {
+func (e *SSHExecutor) exec(ctx context.Context, hostName, command string) (string, error) {
 	h, err := e.host(hostName)
 	if err != nil {
 		return "", err
@@ -112,15 +121,26 @@ func (e *SSHExecutor) exec(hostName, command string) (string, error) {
 	session.Stdout = &stdout
 	session.Stderr = &stderr
 
-	runErr := session.Run(command)
-	out := stdout.String()
-	if stderr.Len() > 0 {
-		out += "\nSTDERR:\n" + stderr.String()
+	type result struct {
+		err error
 	}
-	if runErr != nil {
-		return out, fmt.Errorf("ssh exec on %s: %w", hostName, runErr)
+	done := make(chan result, 1)
+	go func() { done <- result{session.Run(command)} }()
+
+	select {
+	case r := <-done:
+		out := stdout.String()
+		if stderr.Len() > 0 {
+			out += "\nSTDERR:\n" + stderr.String()
+		}
+		if r.err != nil {
+			return out, fmt.Errorf("ssh exec on %s: %w", hostName, r.err)
+		}
+		return out, nil
+	case <-ctx.Done():
+		_ = session.Signal(ssh.SIGTERM)
+		return "", fmt.Errorf("ssh exec on %s: %w", hostName, ctx.Err())
 	}
-	return out, nil
 }
 
 func (e *SSHExecutor) isAllowed(command string, allowlist []string) bool {
