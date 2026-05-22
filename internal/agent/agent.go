@@ -60,8 +60,13 @@ func New(cfg *config.Config, execs *Executors, clusterNames []string) *Agent {
 	// 1 request/second sustained, burst of 3 — stays well within Anthropic limits.
 	limiter := rate.NewLimiter(rate.Every(time.Second), 3)
 
+	// For OAuth tokens (sk-ant-oat*), use Bearer auth.
+	// The SDK always reads ANTHROPIC_API_KEY from env and sets it as x-api-key,
+	// so unset it first to avoid sending both headers (Anthropic rejects the request
+	// when x-api-key contains an OAuth token, even if Bearer is also present).
 	var clientOpt option.RequestOption
 	if strings.HasPrefix(cfg.AnthropicAPIKey, "sk-ant-oat") {
+		os.Unsetenv("ANTHROPIC_API_KEY")
 		clientOpt = option.WithAuthToken(cfg.AnthropicAPIKey)
 	} else {
 		clientOpt = option.WithAPIKey(cfg.AnthropicAPIKey)
