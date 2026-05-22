@@ -274,7 +274,7 @@ func (a *Agent) runTurnBeta(
 				Messages:   betaMsgs,
 				Tools:      a.betaTools,
 				MCPServers: a.mcpServers,
-				Betas:      []anthropic.AnthropicBeta{anthropic.AnthropicBetaMCPClient2025_04_04},
+				Betas:      []anthropic.AnthropicBeta{anthropic.AnthropicBetaMCPClient2025_11_20},
 			})
 			return e
 		}); err != nil {
