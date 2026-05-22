@@ -13,15 +13,29 @@ import (
 )
 
 type Clients struct {
-	clients     map[string]*kubernetes.Clientset
+	clients     map[string]kubernetes.Interface
 	dynamics    map[string]dynamic.Interface
 	restConfigs map[string]*rest.Config
 	clusters    []string
 }
 
+// NewFakeClients builds a Clients backed by pre-populated fakes — for use in tests only.
+func NewFakeClients(fakes map[string]kubernetes.Interface) *Clients {
+	names := make([]string, 0, len(fakes))
+	for n := range fakes {
+		names = append(names, n)
+	}
+	return &Clients{
+		clients:     fakes,
+		dynamics:    make(map[string]dynamic.Interface),
+		restConfigs: make(map[string]*rest.Config),
+		clusters:    names,
+	}
+}
+
 func NewClients(cfg *config.Config) (*Clients, error) {
 	c := &Clients{
-		clients:     make(map[string]*kubernetes.Clientset),
+		clients:     make(map[string]kubernetes.Interface),
 		dynamics:    make(map[string]dynamic.Interface),
 		restConfigs: make(map[string]*rest.Config),
 	}
@@ -70,7 +84,7 @@ func NewClients(cfg *config.Config) (*Clients, error) {
 	return c, nil
 }
 
-func (c *Clients) Get(cluster string) (*kubernetes.Clientset, error) {
+func (c *Clients) Get(cluster string) (kubernetes.Interface, error) {
 	cs, ok := c.clients[cluster]
 	if !ok {
 		return nil, fmt.Errorf("unknown cluster %q (available: %v)", cluster, c.clusters)

@@ -26,12 +26,12 @@ func NewKubectlExecutor(clients *k8sclient.Clients, execAllowedCmds []string) *K
 	return &KubectlExecutor{clients: clients, execAllowedCmds: execAllowedCmds}
 }
 
-// ClientFor returns the kubernetes clientset for the named cluster (used by health checks).
-func (e *KubectlExecutor) ClientFor(cluster string) (*kubernetes.Clientset, error) {
+// ClientFor returns the kubernetes client for the named cluster (used by health checks).
+func (e *KubectlExecutor) ClientFor(cluster string) (kubernetes.Interface, error) {
 	return e.client(cluster)
 }
 
-func (e *KubectlExecutor) client(cluster string) (*kubernetes.Clientset, error) {
+func (e *KubectlExecutor) client(cluster string) (kubernetes.Interface, error) {
 	return e.clients.Get(cluster)
 }
 
@@ -133,9 +133,6 @@ func (e *KubectlExecutor) Get(ctx context.Context, resource, name, namespace, cl
 		return "", fmt.Errorf("unsupported resource type %q", resource)
 	}
 
-	if buf.Len() == 0 {
-		return "No resources found.", nil
-	}
 	return buf.String(), nil
 }
 
@@ -220,6 +217,10 @@ func (e *KubectlExecutor) GetEvents(ctx context.Context, namespace, cluster stri
 	events, err := cs.CoreV1().Events(ns).List(ctx, metav1.ListOptions{})
 	if err != nil {
 		return "", err
+	}
+
+	if len(events.Items) == 0 {
+		return "No events found.", nil
 	}
 
 	var buf bytes.Buffer
