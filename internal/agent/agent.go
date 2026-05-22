@@ -54,14 +54,16 @@ type toolOutput struct {
 
 // Agent runs Claude conversations with tool_use.
 type Agent struct {
-	client       anthropic.Client
-	cfg          *config.Config
-	executors    *Executors
-	tools        []anthropic.ToolUnionParam
-	betaTools    []anthropic.BetaToolUnionParam
-	mcpServers   []anthropic.BetaRequestMCPServerURLDefinitionParam
-	systemPrompt string
-	limiter      *rate.Limiter
+	client           anthropic.Client
+	cfg              *config.Config
+	executors        *Executors
+	tools            []anthropic.ToolUnionParam
+	betaTools        []anthropic.BetaToolUnionParam
+	mcpServers       []anthropic.BetaRequestMCPServerURLDefinitionParam
+	systemPrompt     string
+	systemBlocks     []anthropic.TextBlockParam
+	betaSystemBlocks []anthropic.BetaTextBlockParam
+	limiter          *rate.Limiter
 }
 
 func New(cfg *config.Config, execs *Executors, clusterNames []string) *Agent {
@@ -89,16 +91,39 @@ func New(cfg *config.Config, execs *Executors, clusterNames []string) *Agent {
 		sysPrompt += frigateSystemPromptSection
 	}
 
+	// System prompt and tool definitions are static for the process lifetime.
+	// Cache them with a 1h TTL so they are not re-billed on every turn.
+	stdCache := anthropic.NewCacheControlEphemeralParam()
+	stdCache.TTL = anthropic.CacheControlEphemeralTTLTTL1h
+	betaCache := anthropic.NewBetaCacheControlEphemeralParam()
+	betaCache.TTL = anthropic.BetaCacheControlEphemeralTTLTTL1h
+
+	tools := buildTools(clusterNames, cfg.Tools, cfg.FrigateURL)
+	if n := len(tools); n > 0 && tools[n-1].OfTool != nil {
+		tools[n-1].OfTool.CacheControl = stdCache
+	}
+
 	a := &Agent{
 		client:       anthropic.NewClient(clientOpts...),
 		cfg:          cfg,
 		executors:    execs,
-		tools:        buildTools(clusterNames, cfg.Tools, cfg.FrigateURL),
+		tools:        tools,
 		systemPrompt: sysPrompt,
-		limiter:      limiter,
+		systemBlocks: []anthropic.TextBlockParam{
+			{Text: sysPrompt, CacheControl: stdCache},
+		},
+		betaSystemBlocks: []anthropic.BetaTextBlockParam{
+			{Text: sysPrompt, CacheControl: betaCache},
+		},
+		limiter: limiter,
 	}
+	// convertToolsToBeta JSON-round-trips tools, carrying CacheControl through.
 	a.betaTools = convertToolsToBeta(a.tools)
 	a.mcpServers = buildMCPServers(cfg.MCPServers)
+	// Each MCP server must be referenced by an mcp_toolset entry in tools.
+	for _, srv := range a.mcpServers {
+		a.betaTools = append(a.betaTools, anthropic.BetaToolUnionParamOfMCPToolset(srv.Name))
+	}
 	return a
 }
 
@@ -223,7 +248,7 @@ func (a *Agent) runTurnStd(
 			resp, e = a.client.Messages.New(ctx, anthropic.MessageNewParams{
 				Model:     anthropic.Model(a.cfg.ClaudeModel),
 				MaxTokens: 4096,
-				System:    []anthropic.TextBlockParam{{Type: "text", Text: a.systemPrompt}},
+				System:    a.systemBlocks,
 				Messages:  msgs,
 				Tools:     a.tools,
 			})
@@ -287,7 +312,7 @@ func (a *Agent) runTurnBeta(
 			resp, e = a.client.Beta.Messages.New(ctx, anthropic.BetaMessageNewParams{
 				Model:      anthropic.Model(a.cfg.ClaudeModel),
 				MaxTokens:  4096,
-				System:     []anthropic.BetaTextBlockParam{{Type: "text", Text: a.systemPrompt}},
+				System:     a.betaSystemBlocks,
 				Messages:   betaMsgs,
 				Tools:      a.betaTools,
 				MCPServers: a.mcpServers,
