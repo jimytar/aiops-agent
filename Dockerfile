@@ -9,13 +9,13 @@ RUN CGO_ENABLED=0 GOOS=linux go build \
     -o /aiops-agent \
     ./cmd/aiops-agent
 
-FROM alpine:3.21 AS helm-dl
-ARG HELM_VERSION=v3.17.3
+FROM alpine:3.22 AS helm-dl
+ARG HELM_VERSION=v3.21.0
 RUN apk add --no-cache curl tar && \
     curl -fsSL "https://get.helm.sh/helm-${HELM_VERSION}-linux-amd64.tar.gz" | \
     tar -xz --strip-components=1 -C /tmp linux-amd64/helm
 
-FROM alpine:3.21
+FROM alpine:3.22
 RUN apk add --no-cache git ca-certificates && \
     addgroup -g 65532 nonroot && \
     adduser -u 65532 -G nonroot -S -D nonroot
