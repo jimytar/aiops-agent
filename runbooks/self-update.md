@@ -12,7 +12,7 @@ repo, so it can fix bugs, release new versions, and update its own deployment
 |---|---|
 | App source (this repo) | `/repos/aiops-agent` |
 | Deployments (Flux managed) | `/repos/deployments` |
-| Agent HelmRelease | `/repos/deployments/apps/aiops-agent/helmrelease.yaml` |
+| Agent HelmRelease | `/repos/deployments/infra/aiops-agent/release.yaml` |
 
 ---
 
