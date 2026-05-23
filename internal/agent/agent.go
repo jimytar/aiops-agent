@@ -251,7 +251,14 @@ func (a *Agent) ExecuteTool(
 	}
 	raw, _ := json.Marshal(rawMsg{Role: "user", Content: allContent})
 	msgs := append(messages, raw)
-	return a.RunTurn(ctx, msgs, chatID, username, statusUpdate)
+	result, err := a.RunTurn(ctx, msgs, chatID, username, statusUpdate)
+	if err != nil {
+		// RunTurn failed, but msgs already includes the tool_result blocks.
+		// Return them so the caller can persist the repaired history and avoid
+		// leaving an orphaned tool_use block that would reject future API calls.
+		return &TurnResult{Messages: msgs}, err
+	}
+	return result, nil
 }
 
 // ── Rate-limit retry helpers ─────────────────────────────────────────────────

@@ -54,6 +54,20 @@ func (s *confirmStore) clear(chatID int64) {
 	delete(s.pending, chatID)
 }
 
+// pop removes and returns the confirmation for chatID regardless of expiry.
+// Use this when the caller needs to act on an expired entry (e.g. to inject
+// cancel tool_results before it is silently discarded).
+func (s *confirmStore) pop(chatID int64) (*pendingConfirmation, bool) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	c, ok := s.pending[chatID]
+	if !ok {
+		return nil, false
+	}
+	delete(s.pending, chatID)
+	return c, true
+}
+
 func newNonce() string {
 	const chars = "ABCDEFGHJKLMNPQRSTUVWXYZ23456789"
 	b := make([]byte, 6)

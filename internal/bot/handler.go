@@ -88,33 +88,8 @@ func (h *Handler) handleMessage(ctx context.Context, msg *tgbotapi.Message) {
 		h.send(chatID, "Conversation reset.")
 		return
 	case "/cancel":
-		if pending, ok := h.confirms.get(chatID); ok {
-			h.confirms.clear(chatID)
-			sess := h.sessions.get(chatID)
-			// Build a combined user message that covers all tool_use IDs from the
-			// assistant turn: readonly PartialResults (already executed) + "Cancelled"
-			// for the pending mutating tool + "Cancelled" for any Queued tools.
-			var allContent []json.RawMessage
-			allContent = append(allContent, pending.Tool.PartialResults...)
-			cancelBlock := func(id string) json.RawMessage {
-				b, _ := json.Marshal(map[string]interface{}{
-					"type":        "tool_result",
-					"tool_use_id": id,
-					"content":     "Cancelled by user.",
-					"is_error":    true,
-				})
-				return b
-			}
-			allContent = append(allContent, cancelBlock(pending.Tool.ID))
-			for _, qt := range pending.Tool.Queued {
-				allContent = append(allContent, cancelBlock(qt.ID))
-			}
-			type rawMsg struct {
-				Role    string            `json:"role"`
-				Content []json.RawMessage `json:"content"`
-			}
-			raw, _ := json.Marshal(rawMsg{Role: "user", Content: allContent})
-			sess.append(raw)
+		if pending, ok := h.confirms.pop(chatID); ok {
+			appendCancelResults(sess, pending)
 			h.send(chatID, "Pending confirmation cancelled.")
 		} else {
 			h.send(chatID, "No pending confirmation to cancel.")
@@ -130,17 +105,25 @@ func (h *Handler) handleMessage(ctx context.Context, msg *tgbotapi.Message) {
 		return
 	}
 
-	// Check if this is a nonce reply for a pending confirmation.
-	if pending, ok := h.confirms.get(chatID); ok {
-		if strings.ToUpper(strings.TrimSpace(text)) == pending.Nonce {
+	// Check if a confirmation is pending (active or just-expired).
+	if pending, ok := h.confirms.pop(chatID); ok {
+		if time.Now().After(pending.ExpiresAt) {
+			// Inject cancel tool_results so the orphaned tool_use blocks in history
+			// don't cause the API to reject the next turn.
+			appendCancelResults(sess, pending)
+			h.send(chatID, "⏰ Confirmation expired — the action was not executed.")
+			// fall through to process the user's new message as a regular turn
+		} else if strings.ToUpper(strings.TrimSpace(text)) == pending.Nonce {
 			h.executeConfirmed(ctx, chatID, username, pending)
 			return
+		} else {
+			h.confirms.set(pending) // put back, not yet consumed
+			h.send(chatID, fmt.Sprintf(
+				"⚠️ Pending confirmation `%s` is active. Send the nonce to confirm or /cancel to discard.\n\nNew messages are ignored while a confirmation is pending.",
+				pending.Nonce,
+			))
+			return
 		}
-		h.send(chatID, fmt.Sprintf(
-			"⚠️ Pending confirmation `%s` is active. Send the nonce to confirm or /cancel to discard.\n\nNew messages are ignored while a confirmation is pending.",
-			pending.Nonce,
-		))
-		return
 	}
 
 	// Regular conversation turn.
@@ -194,12 +177,15 @@ func (h *Handler) executeConfirmed(ctx context.Context, chatID int64, username s
 	result, err := h.agent.ExecuteTool(ctx, pending.Tool, sess.history(), chatID, username, pending.Nonce, func(s string) {
 		h.send(chatID, s)
 	})
+	// Save messages even on error: ExecuteTool returns repaired history (with
+	// tool_result blocks) so subsequent turns don't see orphaned tool_use blocks.
+	if result != nil {
+		sess.messages = result.Messages
+	}
 	if err != nil {
 		h.send(chatID, fmt.Sprintf("❌ `%s` failed: %v", pending.Tool.Name, err))
 		return
 	}
-
-	sess.messages = result.Messages
 
 	if len(sess.messages) > summarizeThreshold {
 		if condensed, err := h.agent.SummarizeHistory(ctx, sess.messages); err == nil {
@@ -238,6 +224,49 @@ func (h *Handler) send(chatID int64, text string) {
 		msg.ParseMode = ""
 		_, _ = h.bot.Send(msg)
 	}
+}
+
+// appendCancelResults injects two messages into the session so the history
+// remains valid for the next API call after a cancellation:
+//
+//  1. A user message with tool_result blocks for every tool_use ID from the
+//     pending confirmation (PartialResults from readonly tools + cancel results
+//     for the mutating tool and any queued tools).
+//
+//  2. A synthetic assistant acknowledgment, because the Anthropic API requires
+//     strictly alternating user/assistant messages. Without it, the next real
+//     user message would produce two consecutive user messages and a 400 error.
+func appendCancelResults(sess *session, pending *pendingConfirmation) {
+	var allContent []json.RawMessage
+	allContent = append(allContent, pending.Tool.PartialResults...)
+	// Content must be an array of content blocks (not a plain string) when
+	// is_error is true, or the MCP beta endpoint rejects it as "empty content".
+	cancelBlock := func(id string) json.RawMessage {
+		b, _ := json.Marshal(map[string]interface{}{
+			"type":        "tool_result",
+			"tool_use_id": id,
+			"content":     []map[string]string{{"type": "text", "text": "Cancelled by user."}},
+			"is_error":    true,
+		})
+		return b
+	}
+	allContent = append(allContent, cancelBlock(pending.Tool.ID))
+	for _, qt := range pending.Tool.Queued {
+		allContent = append(allContent, cancelBlock(qt.ID))
+	}
+	type rawMsg struct {
+		Role    string            `json:"role"`
+		Content []json.RawMessage `json:"content"`
+	}
+	userRaw, _ := json.Marshal(rawMsg{Role: "user", Content: allContent})
+	sess.append(userRaw)
+
+	// Synthetic assistant ack to keep the user/assistant alternation valid.
+	asstRaw, _ := json.Marshal(map[string]interface{}{
+		"role":    "assistant",
+		"content": []map[string]string{{"type": "text", "text": "Understood, the pending operation was cancelled."}},
+	})
+	sess.append(asstRaw)
 }
 
 func (h *Handler) isAuthorized(chatID int64) bool {
