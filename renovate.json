@@ -1,0 +1,59 @@
+{
+  "$schema": "https://docs.renovatebot.com/renovate-schema.json",
+  "extends": ["config:recommended"],
+  "timezone": "Europe/Sofia",
+  "schedule": ["before 9am on monday"],
+  "labels": ["dependencies", "renovate"],
+  "assignees": ["jimytar"],
+  "prConcurrentLimit": 5,
+  "commitMessagePrefix": "chore(deps):",
+  "enabledManagers": ["gomod", "dockerfile", "helm", "github-actions"],
+  "packageRules": [
+    {
+      "description": "Group all Go dependency updates",
+      "matchDatasources": ["go"],
+      "groupName": "Go dependencies",
+      "automerge": false
+    },
+    {
+      "description": "Group Docker base image updates",
+      "matchDatasources": ["docker"],
+      "groupName": "Docker images",
+      "automerge": false,
+      "labels": ["docker"]
+    },
+    {
+      "description": "Group Helm chart updates",
+      "matchDatasources": ["helm"],
+      "groupName": "Helm charts",
+      "automerge": false
+    },
+    {
+      "description": "GitHub Actions updates",
+      "matchManagers": ["github-actions"],
+      "groupName": "GitHub Actions",
+      "automerge": false,
+      "commitMessagePrefix": "ci:"
+    },
+    {
+      "description": "Flag major version updates for manual review",
+      "matchUpdateTypes": ["major"],
+      "labels": ["breaking-change"],
+      "commitMessagePrefix": "chore(deps)!:"
+    },
+    {
+      "description": "Auto-patch Go minor/patch versions",
+      "matchDatasources": ["go"],
+      "matchUpdateTypes": ["minor", "patch"],
+      "automerge": false,
+      "labels": ["go-patch"]
+    }
+  ],
+  "ignoreDeps": [],
+  "ignorePaths": [
+    "**/node_modules",
+    "**/vendor",
+    "**/.terraform",
+    "**/terraform.lock.hcl"
+  ]
+}
