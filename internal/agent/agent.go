@@ -235,7 +235,7 @@ func (a *Agent) ExecuteTool(
 		qout, qerr := a.dispatchTool(ctx, qt.Name, qt.Input)
 		audit(chatID, username, qt.Name, qt.Input, true, "", time.Since(qstart).Milliseconds(), qerr)
 		if statusUpdate != nil {
-			statusUpdate(fmt.Sprintf("_(called %s)_", qt.Name))
+			statusUpdate(fmt.Sprintf("`called %s`", qt.Name))
 		}
 		for _, b := range buildToolResultBlocks(qt.ID, qout, qerr, a.cfg.MaxToolOutputBytes) {
 			if enc, err := json.Marshal(b); err == nil {
@@ -303,6 +303,14 @@ func isRateLimit(err error) bool {
 	return strings.Contains(err.Error(), "429") || strings.Contains(err.Error(), "rate_limit")
 }
 
+func isContextTooLarge(err error) bool {
+	if err == nil {
+		return false
+	}
+	s := err.Error()
+	return strings.Contains(s, "request_too_large") || strings.Contains(s, "context_window_exceeded")
+}
+
 // ── Standard API (no MCP) ────────────────────────────────────────────────────
 
 func (a *Agent) runTurnStd(
@@ -316,7 +324,7 @@ func (a *Agent) runTurnStd(
 
 	for {
 		var resp *anthropic.Message
-		if err := a.callWithRetry(ctx, func() error {
+		err := a.callWithRetry(ctx, func() error {
 			var e error
 			resp, e = a.client.Messages.New(ctx, anthropic.MessageNewParams{
 				Model:     anthropic.Model(a.cfg.ClaudeModel),
@@ -326,7 +334,17 @@ func (a *Agent) runTurnStd(
 				Tools:     a.tools,
 			})
 			return e
-		}); err != nil {
+		})
+		if err != nil {
+			if isContextTooLarge(err) {
+				condensed, cerr := a.SummarizeHistory(ctx, stdToRaw(msgs))
+				if cerr != nil {
+					return nil, fmt.Errorf("claude API: %w (summarize also failed: %v)", err, cerr)
+				}
+				msgs = rawToStd(condensed)
+				log.Printf("context too large: summarized history, retrying (chat=%d)", chatID)
+				continue
+			}
 			return nil, fmt.Errorf("claude API: %w", err)
 		}
 
@@ -334,6 +352,9 @@ func (a *Agent) runTurnStd(
 		a.usage.add(resp.Usage.InputTokens, resp.Usage.OutputTokens,
 			resp.Usage.CacheCreationInputTokens, resp.Usage.CacheReadInputTokens)
 
+		if resp.StopReason == "max_tokens" {
+			return nil, fmt.Errorf("response was cut off (max_tokens reached); try asking for a shorter or more focused answer")
+		}
 		if resp.StopReason == "end_turn" || !hasToolUseStd(resp.Content) {
 			return &TurnResult{AssistantText: extractTextStd(resp.Content), Messages: stdToRaw(msgs)}, nil
 		}
@@ -362,7 +383,7 @@ func (a *Agent) runTurnStd(
 			duration := time.Since(start).Milliseconds()
 			audit(chatID, username, tu.Name, tu.Input, true, "", duration, execErr)
 			if statusUpdate != nil {
-				statusUpdate(fmt.Sprintf("_(called %s)_", tu.Name))
+				statusUpdate(fmt.Sprintf("`called %s`", tu.Name))
 			}
 			toolResults = append(toolResults, buildToolResultBlocks(tu.ID, out, execErr, a.cfg.MaxToolOutputBytes)...)
 		}
@@ -394,7 +415,7 @@ func (a *Agent) runTurnBeta(
 
 	for {
 		var resp *anthropic.BetaMessage
-		if err := a.callWithRetry(ctx, func() error {
+		err := a.callWithRetry(ctx, func() error {
 			var e error
 			resp, e = a.client.Beta.Messages.New(ctx, anthropic.BetaMessageNewParams{
 				Model:      anthropic.Model(a.cfg.ClaudeModel),
@@ -406,7 +427,17 @@ func (a *Agent) runTurnBeta(
 				Betas:      []anthropic.AnthropicBeta{anthropic.AnthropicBetaMCPClient2025_11_20},
 			})
 			return e
-		}); err != nil {
+		})
+		if err != nil {
+			if isContextTooLarge(err) {
+				condensed, cerr := a.SummarizeHistory(ctx, betaToRaw(betaMsgs))
+				if cerr != nil {
+					return nil, fmt.Errorf("claude beta API: %w (summarize also failed: %v)", err, cerr)
+				}
+				betaMsgs = rawToBeta(condensed)
+				log.Printf("context too large: summarized history, retrying (chat=%d)", chatID)
+				continue
+			}
 			return nil, fmt.Errorf("claude beta API: %w", err)
 		}
 
@@ -414,6 +445,9 @@ func (a *Agent) runTurnBeta(
 		a.usage.add(resp.Usage.InputTokens, resp.Usage.OutputTokens,
 			resp.Usage.CacheCreationInputTokens, resp.Usage.CacheReadInputTokens)
 
+		if resp.StopReason == "max_tokens" {
+			return nil, fmt.Errorf("response was cut off (max_tokens reached); try asking for a shorter or more focused answer")
+		}
 		if resp.StopReason == "end_turn" || !hasToolUseBeta(resp.Content) {
 			return &TurnResult{
 				AssistantText: extractTextBeta(resp.Content),
@@ -448,7 +482,7 @@ func (a *Agent) runTurnBeta(
 			duration := time.Since(start).Milliseconds()
 			audit(chatID, username, tu.Name, input, true, "", duration, execErr)
 			if statusUpdate != nil {
-				statusUpdate(fmt.Sprintf("_(called %s)_", tu.Name))
+				statusUpdate(fmt.Sprintf("`called %s`", tu.Name))
 			}
 			toolResults = append(toolResults, buildBetaToolResultBlocks(tu.ID, out, execErr, a.cfg.MaxToolOutputBytes)...)
 		}
